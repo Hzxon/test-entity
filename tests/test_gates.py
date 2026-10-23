@@ -1,0 +1,576 @@
+"""gates: each gate against fake gitinfo / sandbox / runner / mutator."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+pytest.importorskip("testgate.sandbox")
+pytest.importorskip("testgate.runner")
+pytest.importorskip("testgate.mutator")
+pytest.importorskip("testgate.gitinfo")
+
+from testgate import gates
+from testgate.core import (
+    ChangedFile,
+    CoverageData,
+    GateResult,
+    Mutant,
+    ProjectConfig,
+    RunContext,
+    Status,
+)
+from testgate.core import TestRun as _TestRun
+
+HIDDEN_NAME = "test_hidden_secret_name"
+
+
+def tr(
+    exit_code: int = 0,
+    passed: int = 3,
+    failed: int = 0,
+    errors: int = 0,
+    output: str = "out",
+    timed_out: bool = False,
+) -> _TestRun:
+    return _TestRun(exit_code, passed, failed, errors, 0, 0.1, output, timed_out)
+
+
+class Fakes:
+    """Records sandbox calls; runner results come from `runs` or `decide`."""
+
+    def __init__(self) -> None:
+        self.builds: list[SimpleNamespace] = []
+        self.runs: list[_TestRun] = []
+        self.decide: Any = None
+        self.pytest_calls: list[tuple[list[str], list[str] | None]] = []
+        self.coverage: tuple[_TestRun, CoverageData] = (tr(), CoverageData())
+        self.proc_codes: list[int] = []
+        self.destroyed = 0
+
+    # sandbox
+    def build_sandbox(
+        self,
+        config: Any,
+        python: str,
+        tests: dict[str, Path],
+        overrides: dict[str, str] | None = None,
+    ) -> SimpleNamespace:
+        sb = SimpleNamespace(
+            python="py", root=Path("/nowhere"), test_dirs=tests, overrides=overrides or {}
+        )
+        self.builds.append(sb)
+        return sb
+
+    def run_in_sandbox(
+        self, sb: Any, argv: list[str], timeout_s: int, extra_env: Any = None
+    ) -> subprocess.CompletedProcess[str]:
+        code = self.proc_codes.pop(0) if self.proc_codes else 0
+        return subprocess.CompletedProcess(argv, code, "so", "se")
+
+    def destroy(self, sb: Any) -> None:
+        self.destroyed += 1
+
+    # runner
+    def run_pytest(
+        self,
+        sb: Any,
+        names: list[str],
+        timeout_s: int,
+        seed: str | None,
+        extra_args: list[str] | None = None,
+    ) -> _TestRun:
+        self.pytest_calls.append((names, extra_args))
+        if self.decide is not None:
+            result: _TestRun = self.decide(sb)
+            return result
+        return self.runs.pop(0) if len(self.runs) > 1 else self.runs[0]
+
+    def run_coverage(self, *args: Any) -> tuple[_TestRun, CoverageData]:
+        return self.coverage
+
+
+@pytest.fixture
+def fakes(monkeypatch: pytest.MonkeyPatch) -> Fakes:
+    f = Fakes()
+    monkeypatch.setattr(
+        gates,
+        "sandbox",
+        SimpleNamespace(
+            build_sandbox=f.build_sandbox, run_in_sandbox=f.run_in_sandbox, destroy=f.destroy
+        ),
+    )
+    monkeypatch.setattr(
+        gates, "runner", SimpleNamespace(run_pytest=f.run_pytest, run_coverage=f.run_coverage)
+    )
+    return f
+
+
+def make_ctx(
+    tmp_path: Path,
+    hidden: bool = True,
+    auto: bool = True,
+    changed: list[ChangedFile] | None = None,
+    **cfg: Any,
+) -> RunContext:
+    (tmp_path / "tests/golden").mkdir(parents=True)
+    if auto:
+        (tmp_path / "tests/auto").mkdir(parents=True)
+    hidden_dir = None
+    if hidden:
+        hidden_dir = tmp_path / "hid"
+        hidden_dir.mkdir()
+    config = ProjectConfig(root=tmp_path, package="src/pkg", import_name="pkg", **cfg)
+    return RunContext(
+        config=config,
+        base_ref="main",
+        changed=changed or [],
+        hidden_dir=hidden_dir,
+        seed="s3cret",
+        seed_is_secret=True,
+        python="python",
+    )
+
+
+# --- run_gates --------------------------------------------------------------
+
+
+def test_protected_fail_skips_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    ctx = make_ctx(tmp_path)
+    monkeypatch.setattr(
+        gates,
+        "gitinfo",
+        SimpleNamespace(tree_hash=lambda root, ref, path: "a" if ref is None else "b"),
+    )
+    results = gates.run_gates(ctx)
+    assert [r.name for r in results] == gates.GATE_ORDER
+    assert results[0].status is Status.FAIL
+    assert results[0].public["changed"] == ctx.config.protected
+    assert all(r.status is Status.SKIP for r in results[1:])
+    assert all(r.summary == "skipped: protected surface changed" for r in results[1:])
+    assert fakes.builds == []
+
+
+def test_disabled_gate_is_skipped_and_timed(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.config.gates = {name: False for name in gates.GATE_ORDER}
+    ctx.config.gates["build"] = True
+    results = gates.run_gates(ctx)
+    by_name = {r.name: r for r in results}
+    assert by_name["tests"].status is Status.SKIP
+    assert by_name["tests"].summary == "disabled"
+    assert by_name["build"].status is Status.PASS
+    assert by_name["build"].duration_s >= 0
+
+
+def test_only_filter(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    results = gates.run_gates(ctx, only=["build"])
+    assert [r.status for r in results].count(Status.PASS) == 1
+    assert next(r for r in results if r.name == "hygiene").status is Status.SKIP
+
+
+def test_exception_becomes_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = make_ctx(tmp_path)
+
+    def boom(ctx: RunContext) -> GateResult:
+        raise ValueError("secret detail /private/path")
+
+    monkeypatch.setitem(gates.GATES, "build", boom)
+    ctx.config.gates = {n: n == "build" for n in gates.GATE_ORDER}
+    result = next(r for r in gates.run_gates(ctx) if r.name == "build")
+    assert result.status is Status.ERROR
+    assert result.blocks
+    assert result.public == {"error": "ValueError"}
+    assert "ValueError" in result.summary
+    assert "secret detail" not in result.summary
+    assert "secret detail" in result.private["error"]
+    assert "Traceback" in result.private["traceback"]
+
+
+# --- protected --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("now", "base", "status"),
+    [
+        ("x", "x", Status.PASS),
+        (None, None, Status.PASS),
+        ("x", None, Status.FAIL),
+        ("x", "y", Status.FAIL),
+        (None, "y", Status.FAIL),
+    ],
+)
+def test_protected_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    now: str | None,
+    base: str | None,
+    status: Status,
+) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.config.protected = ["p"]
+    monkeypatch.setattr(
+        gates,
+        "gitinfo",
+        SimpleNamespace(tree_hash=lambda root, ref, path: now if ref is None else base),
+    )
+    assert gates.gate_protected(ctx).status is status
+
+
+def test_protected_no_base_ref(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.base_ref = None
+    result = gates.gate_protected(ctx)
+    assert result.status is Status.SKIP
+    assert result.summary == "no base ref"
+
+
+# --- hygiene ----------------------------------------------------------------
+
+
+def write(root: Path, rel: str, text: str = "x = 1\n") -> None:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def test_hygiene_clean(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    write(tmp_path, "tests/auto/test_a.py")
+    write(tmp_path, "tests/auto/__init__.py", "")
+    write(tmp_path, "tests/auto/data.json", "{}")
+    write(tmp_path, "src/pkg/mod.py")
+    assert gates.gate_hygiene(ctx).status is Status.PASS
+
+
+def test_hygiene_conftest_in_auto(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    write(tmp_path, "tests/auto/conftest.py")
+    write(tmp_path, "tests/auto/helper.py")
+    result = gates.gate_hygiene(ctx)
+    assert result.status is Status.FAIL
+    assert len(result.public["findings"]) == 2
+
+
+@pytest.mark.parametrize("token", gates.FORBIDDEN_TOKENS)
+def test_hygiene_forbidden_tokens(tmp_path: Path, token: str) -> None:
+    ctx = make_ctx(tmp_path)
+    write(
+        tmp_path,
+        "src/pkg/mod.py",
+        f"a = 1\nb = {token!r}\n" if '"' in token else f'a = 1\nb = "{token}"\n',
+    )
+    result = gates.gate_hygiene(ctx)
+    assert result.status is Status.FAIL
+    assert "src/pkg/mod.py:2" in result.public["findings"][0]
+
+
+def test_hygiene_package_imports_tests(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    write(tmp_path, "src/pkg/mod.py", "from tests.golden import x\n")
+    assert gates.gate_hygiene(ctx).status is Status.FAIL
+
+
+def test_hygiene_auto_imports_golden_or_hidden(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    write(tmp_path, "tests/auto/test_a.py", "from tests.golden.test_x import y\n")
+    write(tmp_path, "tests/auto/test_b.py", "import hidden\n")
+    result = gates.gate_hygiene(ctx)
+    assert result.status is Status.FAIL
+    assert len(result.public["findings"]) == 2
+
+
+def test_hygiene_warn_for_unchanged_files(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("src/pkg/other.py", {1})])
+    write(tmp_path, "src/pkg/mod.py", 'x = "TESTGATE"\n')
+    assert gates.gate_hygiene(ctx).status is Status.WARN
+    ctx.changed = [ChangedFile("src/pkg/mod.py", {1})]
+    assert gates.gate_hygiene(ctx).status is Status.FAIL
+
+
+# --- build ------------------------------------------------------------------
+
+
+def test_build_pass_and_fail(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    assert gates.gate_build(ctx).status is Status.PASS
+    fakes.proc_codes = [0, 1]
+    result = gates.gate_build(ctx)
+    assert result.status is Status.FAIL
+    assert result.public == {"exit_code": 1}
+    assert "so" in result.private["output"]
+    assert fakes.destroyed == 2
+
+
+# --- tests ------------------------------------------------------------------
+
+
+def test_tests_pass_runs_repeats(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path, repeats=5)
+    fakes.runs = [tr()]
+    result = gates.gate_tests(ctx)
+    assert result.status is Status.PASS
+    assert len(fakes.pytest_calls) == 5
+    assert fakes.pytest_calls[0][0] == ["golden", "auto"]
+    assert result.public["passed"] == 3
+    assert ctx.shared["visible_run"].passed == 3
+
+
+def test_tests_failed_run_one(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    fakes.runs = [tr(1, passed=2, failed=1)]
+    result = gates.gate_tests(ctx)
+    assert result.status is Status.FAIL
+    assert result.summary == "tests failed"
+    assert len(fakes.pytest_calls) == 1
+    assert result.public["failed"] == 1
+
+
+def test_tests_flaky(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path, repeats=5)
+    fakes.runs = [tr(), tr(), tr(1, passed=2, failed=1)]
+    result = gates.gate_tests(ctx)
+    assert result.status is Status.FAIL
+    assert result.summary == "flaky: passed run 1, failed run 3"
+    assert result.public["runs"] == 3
+    assert len(fakes.pytest_calls) == 3
+
+
+def test_tests_zero_collected(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    fakes.runs = [tr(0, passed=0)]
+    result = gates.gate_tests(ctx)
+    assert result.status is Status.FAIL
+    assert "no tests" in result.summary
+
+
+def test_tests_without_dirs_fails(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    (tmp_path / "tests/golden").rmdir()
+    (tmp_path / "tests/auto").rmdir()
+    assert gates.gate_tests(ctx).status is Status.FAIL
+
+
+# --- hidden -----------------------------------------------------------------
+
+
+def test_hidden_required_vs_optional(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path, hidden=False)
+    result = gates.gate_hidden(ctx)
+    assert (result.status, result.summary) == (Status.FAIL, "no hidden tests")
+    ctx.config.hidden_required = False
+    assert gates.gate_hidden(ctx).status is Status.SKIP
+
+
+def test_hidden_public_is_counts_only(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    out = f"FAILED {HIDDEN_NAME} - AssertionError: assert 41 == 42"
+    fakes.runs = [tr(1, passed=7, failed=2, output=out)]
+    result = gates.gate_hidden(ctx)
+    assert result.status is Status.FAIL
+    assert result.summary == "hidden: 7 passed, 2 failed"
+    assert result.public == {"passed": 7, "failed": 2, "errors": 0}
+    blob = repr(result.public) + result.summary
+    assert HIDDEN_NAME not in blob
+    assert "AssertionError" not in blob
+    assert HIDDEN_NAME in result.private["output"]
+    assert list(fakes.builds[0].test_dirs) == ["hidden"]
+    assert fakes.pytest_calls[0][0] == ["hidden"]
+
+
+def test_hidden_pass_and_empty(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    fakes.runs = [tr(0, passed=4)]
+    assert gates.gate_hidden(ctx).status is Status.PASS
+    fakes.runs = [tr(0, passed=0)]
+    assert gates.gate_hidden(ctx).status is Status.FAIL
+
+
+# --- coverage ---------------------------------------------------------------
+
+
+def cov(statements: dict[str, set[int]], covered: dict[str, set[int]]) -> CoverageData:
+    return CoverageData(covered=covered, statements=statements)
+
+
+def test_coverage_thresholds(tmp_path: Path, fakes: Fakes) -> None:
+    changed = [ChangedFile("src/pkg/a.py", {1, 2, 3, 4, 99})]
+    ctx = make_ctx(tmp_path, changed=changed, coverage_min_total=0.5, coverage_min_changed=0.5)
+    data = cov({"src/pkg/a.py": {1, 2, 3, 4, 5, 6}}, {"src/pkg/a.py": {1, 2, 3}})
+    fakes.coverage = (tr(), data)
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.PASS
+    assert ctx.shared["coverage"] is data
+    assert result.public["total"] == 0.5
+    assert result.public["changed"] == 0.75  # line 99 is not a statement
+    assert result.public["uncovered_changed"] == ["src/pkg/a.py:4"]
+
+    ctx.config.coverage_min_changed = 0.9
+    failed = gates.gate_coverage(ctx)
+    assert failed.status is Status.FAIL
+    assert "changed 75% < 90%" in failed.summary
+
+    ctx.config.coverage_min_changed = 0.5
+    ctx.config.coverage_min_total = 0.6
+    assert gates.gate_coverage(ctx).status is Status.FAIL
+
+
+def test_coverage_without_changed_skips_changed_check(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path, coverage_min_changed=1.0)
+    fakes.coverage = (tr(), cov({"a.py": {1, 2}}, {"a.py": {1}}))
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.PASS
+    assert result.public["changed"] is None
+
+
+def test_coverage_uncovered_capped_at_20_per_file(tmp_path: Path, fakes: Fakes) -> None:
+    lines = set(range(1, 41))
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("a.py", lines)])
+    fakes.coverage = (tr(), cov({"a.py": lines}, {"a.py": set()}))
+    assert len(gates.gate_coverage(ctx).public["uncovered_changed"]) == 20
+
+
+def test_coverage_fails_when_tests_fail(tmp_path: Path, fakes: Fakes) -> None:
+    ctx = make_ctx(tmp_path)
+    fakes.coverage = (tr(1, failed=1), cov({"a.py": {1}}, {"a.py": {1}}))
+    assert gates.gate_coverage(ctx).status is Status.FAIL
+
+
+# --- mutation ---------------------------------------------------------------
+
+
+def install_mutator(monkeypatch: pytest.MonkeyPatch, per_file: dict[str, int]) -> list[Any]:
+    calls: list[Any] = []
+
+    def generate(
+        path: str, source: str, lines: set[int], seed: str, max_mutants: int
+    ) -> list[Mutant]:
+        calls.append((path, set(lines), max_mutants))
+        return [
+            Mutant(
+                f"{path}:{i}:ROR",
+                path,
+                i,
+                "ROR",
+                "a < b",
+                "a <= b",
+                f"SURVIVE {i}" if i % 2 else f"KILL {i}",
+            )
+            for i in range(1, per_file.get(path, 0) + 1)
+        ]
+
+    monkeypatch.setattr(gates, "mutator", SimpleNamespace(generate_mutants=generate))
+    return calls
+
+
+def mutation_ctx(tmp_path: Path, **cfg: Any) -> RunContext:
+    changed = [ChangedFile("src/pkg/a.py", {1, 2, 3, 4, 50}), ChangedFile("src/pkg/b.py", {1})]
+    ctx = make_ctx(tmp_path, changed=changed, **cfg)
+    write(tmp_path, "src/pkg/a.py", "a = 1\n")
+    write(tmp_path, "src/pkg/b.py", "b = 1\n")
+    ctx.shared["coverage"] = cov(
+        {"src/pkg/a.py": {1, 2, 3, 4, 50}, "src/pkg/b.py": {1}},
+        {"src/pkg/a.py": {1, 2, 3, 4}, "src/pkg/b.py": set()},
+    )
+    return ctx
+
+
+def test_mutation_score_survivors_and_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    calls = install_mutator(monkeypatch, {"src/pkg/a.py": 4})
+    ctx = mutation_ctx(tmp_path, mutation_min_score=0.5, mutation_max_shown=1)
+    fakes.decide = lambda sb: (
+        tr(0) if not sb.overrides or "SURVIVE" in next(iter(sb.overrides.values())) else tr(1, 1, 1)
+    )
+    result = gates.gate_mutation(ctx)
+    # candidate lines = changed ∩ covered; b.py has none covered
+    assert calls == [("src/pkg/a.py", {1, 2, 3, 4}, 50)]
+    assert result.public["generated"] == 4
+    assert result.public["killed"] == 2
+    assert result.public["score"] == 0.5
+    assert result.status is Status.PASS
+    assert len(result.public["survivors"]) == 1  # capped per file
+    assert result.public["survivors"][0]["id"] == "src/pkg/a.py:1:ROR"
+    assert set(result.public["survivors"][0]) == {"id", "line", "operator", "before", "after"}
+    # golden + hidden only, never auto; baseline first without -x, then -x on every mutant
+    assert all(list(sb.test_dirs) == ["golden", "hidden"] for sb in fakes.builds)
+    assert fakes.pytest_calls[0] == (["golden", "hidden"], None)
+    assert all(
+        names == ["golden", "hidden"] and extra == ["-x"] for names, extra in fakes.pytest_calls[1:]
+    )
+    assert len(result.private["mutants"]) == 4
+
+    ctx.config.mutation_min_score = 0.6
+    assert gates.gate_mutation(ctx).status is Status.FAIL
+
+
+def test_mutation_timeout_counts_as_killed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {"src/pkg/a.py": 2})
+    ctx = mutation_ctx(tmp_path, mutation_min_score=1.0)
+    fakes.runs = [tr(0), tr(124, passed=0, timed_out=True)]  # baseline passes, mutants time out
+    result = gates.gate_mutation(ctx)
+    assert result.public["killed"] == 2
+    assert result.status is Status.PASS
+
+
+def test_mutation_no_mutants_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {})
+    result = gates.gate_mutation(mutation_ctx(tmp_path))
+    assert (result.status, result.summary) == (Status.SKIP, "no eligible lines")
+
+
+def test_mutation_without_changed_uses_all_covered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    calls = install_mutator(monkeypatch, {})
+    ctx = mutation_ctx(tmp_path)
+    ctx.changed = []
+    gates.gate_mutation(ctx)
+    assert calls == [("src/pkg/a.py", {1, 2, 3, 4}, 50)]
+
+
+def test_mutation_total_capped_at_max_mutants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {"src/pkg/a.py": 4, "src/pkg/b.py": 4})
+    ctx = mutation_ctx(tmp_path, mutation_max_mutants=5, mutation_min_score=0.0)
+    ctx.shared["coverage"].covered["src/pkg/b.py"] = {1}
+    fakes.runs = [tr(0), tr(1, 0, 1)]
+    assert gates.gate_mutation(ctx).public["generated"] == 5
+
+
+def test_mutation_runs_coverage_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {"src/pkg/a.py": 1})
+    ctx = mutation_ctx(tmp_path)
+    ctx.shared.pop("coverage")
+    fakes.coverage = (tr(), cov({"src/pkg/a.py": {1}}, {"src/pkg/a.py": {1}}))
+    fakes.runs = [tr(0), tr(1, 0, 1)]
+    result = gates.gate_mutation(ctx)
+    assert result.public["generated"] == 1
+    assert "coverage" in ctx.shared
+
+
+def test_mutation_skips_when_baseline_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {"src/pkg/a.py": 2})
+    ctx = mutation_ctx(tmp_path)
+    fakes.runs = [tr(1, 1, 1)]
+    result = gates.gate_mutation(ctx)
+    assert result.status is Status.SKIP
+    assert "unmutated" in result.summary
+    assert len(fakes.pytest_calls) == 1  # no mutant was run

@@ -1,0 +1,19 @@
+package: src/discount
+import_name: discount
+tests:
+  golden: tests/golden
+  auto: tests/auto
+  hidden: ../discount-hidden
+gates:
+  protected: false
+  mutation:
+    enabled: true
+    min_score: 0.5
+    max_mutants: 20
+    timeout_s: 30
+  tests:
+    enabled: true
+    repeats: 2
+sandbox:
+  network: false
+  timeout_s: 120

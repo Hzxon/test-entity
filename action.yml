@@ -1,0 +1,53 @@
+name: testgate
+description: Merge gate that runs protected, hidden and mutation checks on a Python change.
+inputs:
+  base:
+    description: Git ref the change is compared with.
+    default: origin/main
+  hidden-dir:
+    description: Directory holding the hidden tests.
+    default: .testgate-hidden
+  python-version:
+    description: Python version used to run testgate and the sandbox.
+    default: "3.12"
+  root:
+    description: Project root.
+    default: .
+outputs:
+  verdict:
+    description: pass or fail, read from testgate.json.
+    value: ${{ steps.verdict.outputs.verdict }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install testgate
+      shell: bash
+      run: pip install "${{ github.action_path }}"
+    - name: Run testgate
+      id: run
+      shell: bash
+      continue-on-error: false
+      run: >
+        testgate run
+        --root "${{ inputs.root }}"
+        --base "${{ inputs.base }}"
+        --hidden "${{ inputs.hidden-dir }}"
+        --json testgate.json
+        --private-log testgate-private.log
+    - name: Upload private log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: testgate-private
+        path: testgate-private.log
+        if-no-files-found: ignore
+    - name: Read verdict
+      id: verdict
+      if: always()
+      shell: bash
+      run: |
+        v=$(python -c "import json,sys; print(json.load(open('testgate.json'))['verdict'])" 2>/dev/null || echo error)
+        echo "verdict=$v" >> "$GITHUB_OUTPUT"

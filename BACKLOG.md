@@ -23,7 +23,7 @@ Scope decisions made with the user on 2026-10-23:
 - Ships as a CLI plus a GitHub composite action.
 - Lives in `~/dev/testgate`, its own repo.
 
-## Current state (2026-10-23, main after PR #14, tag v0 at ac5b38c)
+## Current state (2026-10-23, v0.1 complete on main, tag v0 at ac5b38c)
 
 Done and verified locally:
 - Seven gates in `src/testgate/gates.py`, run in order:
@@ -108,8 +108,15 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
 
+## Decisions taken
+
+- #9 (2026-10-23): hidden tests required by default; `gates.hidden.required: false`
+  turns the gate into SKIP for repos that opt out.
+- #10 (2026-10-23): useless auto tests warn by default;
+  `gates.mutation.auto_useless_blocks: true` makes them block.
+- Scope (2026-10-23): testgate stays a pre-merge gate. No spec-stage, release
+  or operations tooling.
+
 ## Open questions for the user (`needs-human`)
 
-- [#9 Should hidden tests be required by default?](https://github.com/Hzxon/test-entity/issues/9)
-- [#10 Should useless agent tests block merges or only warn?](https://github.com/Hzxon/test-entity/issues/10)
 - [#11 GitHub only, or GitLab CI too?](https://github.com/Hzxon/test-entity/issues/11)

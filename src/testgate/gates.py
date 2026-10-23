@@ -510,6 +510,11 @@ def _auto_usefulness(
 
 def gate_mutation(ctx: RunContext) -> GateResult:
     cfg = ctx.config
+    # an adapter may replace mutation with its own judge (http: differential vs the base ref)
+    alt = getattr(ctx.language, "mutation_gate", None)
+    if alt is not None:
+        result: GateResult = alt(ctx)
+        return result
     data: CoverageData | None = ctx.shared.get("coverage")
     if data is None:
         _, data = _measure_coverage(ctx)

@@ -373,3 +373,42 @@ def test_changed_units_are_routes_whose_spec_changed(project: ProjectConfig, tmp
     ]
     ctx.base_ref = None
     assert LANG.changed_units(ctx) is None
+
+
+# --- differential gate (#35) ---------------------------------------------------
+
+from testgate.languages.http import same_response, unchanged_cases
+
+
+def test_same_response_compares_json_structurally_and_text_exactly():
+    assert same_response(resp(200, {"a": 1, "b": 2}), Response(200, {}, b'{"b": 2, "a": 1}'))
+    assert not same_response(resp(200, {"a": 1}), resp(201, {"a": 1}))
+    assert not same_response(resp(200, {"a": 1}), resp(200, {"a": 2}))
+    assert same_response(resp(200, "plain", {}), resp(200, "plain", {}))
+    assert not same_response(resp(200, "plain", {}), resp(200, "plain ", {}))
+
+
+def test_unchanged_cases_drop_changed_and_unknown_routes():
+    routes = load_routes(OPENAPI)
+    cases = [
+        Case("f", "p", "POST", "/price", {}, None, {}),
+        Case("f", "o", "GET", "/orders/5", {}, None, {}),
+        Case("f", "x", "GET", "/nowhere", {}, None, {}),
+    ]
+    pairs = unchanged_cases(cases, routes, {"POST /price"})
+    assert [(c.name, r) for c, r in pairs] == [("o", "GET /orders/{id}")]
+
+
+def test_survivor_labels_keep_hidden_case_names_private():
+    g = Case("tests/golden/a.http.yaml", "golden name", "GET", "/", {}, None, {})
+    h = Case("tests/hidden/b.http.yaml", "secret name", "GET", "/", {}, None, {})
+    assert LANG._survivor(g, "GET /", 0) == {
+        "route": "GET /",
+        "case": "golden name",
+        "file": "golden",
+    }
+    assert LANG._survivor(h, "GET /", 3) == {
+        "route": "GET /",
+        "case": "hidden case 3",
+        "file": "hidden",
+    }

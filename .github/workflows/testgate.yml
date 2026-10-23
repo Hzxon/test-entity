@@ -18,6 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Hzxon/testgate-hidden
+          ref: main  # set explicitly: resolving the default branch needs API access the token lacks
           ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}
           path: .testgate-hidden
 

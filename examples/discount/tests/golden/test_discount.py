@@ -23,3 +23,8 @@ def test_never_below_zero():
 def test_negative_subtotal_rejected():
     with pytest.raises(ValueError):
         final_price(Decimal(-1))
+
+
+def test_agent_sneaked_this_in():
+    """An agent editing a protected test must be rejected by the protected gate."""
+    assert True

@@ -32,7 +32,7 @@ Run it locally with `testgate run --base origin/main`, or `testgate run --no-git
 | tests | Golden and auto tests pass, `repeats` times (flaky check) | pass/fail counts | yes |
 | hidden | Hidden tests pass | pass/fail counts | yes |
 | coverage | Total and changed-line coverage | percentages, uncovered file:line | yes |
-| mutation | Mutants of changed, covered lines are killed by golden + hidden tests | generated, killed, score, survivor file:line | yes below `min_score` |
+| mutation | Mutants of changed, covered lines are killed by golden + hidden tests; each auto test file must kill a mutant they missed (the ACH rule) | generated, killed, score, survivor file:line, `auto_useless` file names | yes below `min_score`; useless auto tests warn, or fail with `auto_useless_blocks: true` |
 
 ## Hidden tests and the seed
 

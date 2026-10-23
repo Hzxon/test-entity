@@ -57,6 +57,9 @@ class ProjectConfig:
     mutation_max_mutants: int = 50  # sampled with the seed when more are eligible
     mutation_max_shown: int = 7  # survivors listed per changed file (Google caps at 7 x files)
     mutation_timeout_s: int = 60  # per mutant run
+    mutation_auto_useless_blocks: bool = (
+        False  # FAIL (not WARN) when an auto test file kills nothing new
+    )
     network: bool = False  # sandbox blocks sockets when False
     timeout_s: int = 600  # per pytest invocation
     python: str | None = None  # interpreter for the sandbox; None = sys.executable

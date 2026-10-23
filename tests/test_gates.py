@@ -574,3 +574,52 @@ def test_mutation_skips_when_baseline_fails(
     assert result.status is Status.SKIP
     assert "unmutated" in result.summary
     assert len(fakes.pytest_calls) == 1  # no mutant was run
+
+
+def test_mutation_auto_useless_warns_then_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {"src/pkg/a.py": 2})  # line 1 survives, line 2 is killed
+    ctx = mutation_ctx(tmp_path, mutation_min_score=0.5)
+    write(tmp_path, "tests/auto/test_weak.py", "def test_t(): pass\n")
+    write(tmp_path, "tests/auto/test_strong.py", "def test_t(): pass\n")
+
+    def decide(sb: Any) -> _TestRun:
+        if not sb.overrides:
+            return tr(0)  # baseline
+        if list(sb.test_dirs) == ["auto"]:
+            extra = fakes.pytest_calls[-1][1] or []
+            return tr(1, 0, 1) if "tests/auto/test_strong.py" in extra else tr(0)
+        return tr(0) if "SURVIVE" in next(iter(sb.overrides.values())) else tr(1, 0, 1)
+
+    fakes.decide = decide
+    result = gates.gate_mutation(ctx)
+    assert result.status is Status.WARN
+    assert result.public["auto_checked"] == 2
+    assert result.public["auto_useless"] == ["test_weak.py"]
+    assert result.private["auto_kills"] == {
+        "test_strong.py": ["src/pkg/a.py:1:ROR"],
+        "test_weak.py": [],
+    }
+    # auto runs: one per (file, survivor), each on the auto dir only with -x
+    auto_calls = [c for c in fakes.pytest_calls if c[0] == []]
+    assert sorted(c[1] or [] for c in auto_calls) == [
+        ["tests/auto/test_strong.py", "-x"],
+        ["tests/auto/test_weak.py", "-x"],
+    ]
+
+    ctx.config.mutation_auto_useless_blocks = True
+    assert gates.gate_mutation(ctx).status is Status.FAIL
+
+
+def test_mutation_no_survivors_skips_auto_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_mutator(monkeypatch, {"src/pkg/a.py": 1})
+    ctx = mutation_ctx(tmp_path, mutation_min_score=0.5)
+    write(tmp_path, "tests/auto/test_weak.py", "def test_t(): pass\n")
+    fakes.decide = lambda sb: tr(0) if not sb.overrides else tr(1, 0, 1)
+    result = gates.gate_mutation(ctx)
+    assert result.status is Status.PASS
+    assert result.public["auto_checked"] == 0
+    assert result.public["auto_useless"] == []

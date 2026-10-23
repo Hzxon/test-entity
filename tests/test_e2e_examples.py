@@ -65,7 +65,12 @@ def _run_cli(example: Path, tmp_path: Path) -> tuple[int, Path, Path]:
 def test_honest_example_passes(tmp_path):
     code, out, _ = _run_cli(HONEST, tmp_path)
     assert code == 0
-    assert json.loads(out.read_text())["verdict"] == "pass"
+    report = json.loads(out.read_text())
+    assert report["verdict"] == "pass"
+    mutation = next(g for g in report["gates"] if g["name"] == "mutation")
+    # the agent's test only checks the return type, so it kills nothing golden + hidden missed
+    assert mutation["status"] == "warn"
+    assert mutation["auto_useless"] == ["test_agent.py"]
 
 
 @needs_cli

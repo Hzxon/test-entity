@@ -170,3 +170,15 @@ def test_base_ref_without_file_falls_back_to_worktree(tmp_path: Path) -> None:
     write(tmp_path, MINIMAL)
     cfg = load_config(tmp_path, "main")
     assert cfg.raw["_source"] == "worktree"
+
+
+def test_mutation_auto_useless_blocks_key(tmp_path: Path) -> None:
+    (tmp_path / "testgate.yaml").write_text(
+        "package: src/p\nimport_name: p\ngates:\n  mutation:\n    auto_useless_blocks: true\n"
+    )
+    assert load_config(tmp_path, None).mutation_auto_useless_blocks is True
+    (tmp_path / "testgate.yaml").write_text(
+        "package: src/p\nimport_name: p\ngates:\n  mutation:\n    auto_useless_blocks: 1\n"
+    )
+    with pytest.raises(GateError, match="auto_useless_blocks"):
+        load_config(tmp_path, None)

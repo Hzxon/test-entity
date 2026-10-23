@@ -23,8 +23,12 @@ of truth that drifts from the code.
 - **`BACKLOG.md`** is a one-page snapshot: what we build, current state, and
   links to the open issues. It is updated at the end of each session and
   never holds work that is not also an issue.
-- **testgate itself** is the required check once issue #6 lands; the verdict
-  is the review.
+- **`main` is protected by a ruleset** (`main: PR + green checks`, no bypass):
+  every change arrives by squash-merged PR, and the checks `test (3.11)`,
+  `test (3.12)`, `test (3.13)`, `honest-passes` and `cheat-fails` must pass.
+  0 approving reviews are required. `BACKLOG.md` updates go through a PR too.
+- **testgate itself** joins the required checks once issue #6 lands; the
+  verdict is the review.
 
 ## Rules for agents
 

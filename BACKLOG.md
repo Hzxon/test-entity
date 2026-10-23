@@ -86,7 +86,9 @@ Real use: `testgate init` in a project, commit, then
 
 Work is tracked in GitHub Issues at https://github.com/Hzxon/test-entity/issues.
 Labels are the state machine; see `docs/adr/0001-project-management-on-github.md`.
-An agent may only start an issue labeled `status:ready`. Nothing is `ready` yet.
+An agent may only start an issue labeled `status:ready`.
+`main` is protected: PR plus green CI and self-test checks, squash merge only,
+no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 
 ## Next to implement, in order
 

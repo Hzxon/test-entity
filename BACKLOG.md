@@ -23,7 +23,7 @@ Scope decisions made with the user on 2026-10-23:
 - Ships as a CLI plus a GitHub composite action.
 - Lives in `~/dev/testgate`, its own repo.
 
-## Current state (2026-10-23, v0.1 complete on main, tag v0 at ac5b38c)
+## Current state (2026-10-24, v1 complete on main; issues #1-#37 closed; tag v0 at ac5b38c)
 
 Done and verified locally:
 - Seven gates in `src/testgate/gates.py`, run in order:
@@ -72,7 +72,7 @@ Not verified:
 
 Known limits (documented in README.md):
 - Python, JavaScript/TypeScript (vitest), and HTTP black-box mode (any
-  runtime; route coverage and the differential gate are still to come).
+  runtime: fixtures, route coverage, differential gate, docker compose).
 - Equivalent mutants are reduced by rules (clamps, message-only constants,
   dead assignments); there is no general equivalence detection.
 - Sandbox is subprocess-based with a socket block, not a container.
@@ -101,6 +101,10 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 
 ## Next to implement, in order
 
+No open issues as of 2026-10-24. Candidates for v1.1, not yet filed: tag `v1`,
+ratchet the self-gate thresholds again (golden + hidden now cover ~50%),
+and a `testgate init --language http` template.
+
 | # | Issue | Milestone |
 |---|---|---|
 | 1 | ~~[Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1)~~ done | v0 |
@@ -111,11 +115,11 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | ~~[JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7)~~ done | v1 |
 | 8 | ~~[HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8)~~ design accepted (ADR 0002); split into #33-#37 | v1 |
-| 11 | ~~[HTTP mode 1/5: skeleton, launcher, fixture runner](https://github.com/Hzxon/test-entity/issues/33)~~ in review | v1 |
-| 12 | ~~[HTTP mode 2/5: route coverage](https://github.com/Hzxon/test-entity/issues/34)~~ in review | v1 |
-| 13 | ~~[HTTP mode 3/5: differential gate](https://github.com/Hzxon/test-entity/issues/35)~~ in review | v1 |
-| 14 | ~~[HTTP mode 4/5: example pair and e2e](https://github.com/Hzxon/test-entity/issues/36)~~ in review | v1 |
-| 15 | ~~[HTTP mode 5/5: docker compose start](https://github.com/Hzxon/test-entity/issues/37)~~ in review | v1 |
+| 11 | ~~[HTTP mode 1/5: skeleton, launcher, fixture runner](https://github.com/Hzxon/test-entity/issues/33)~~ done | v1 |
+| 12 | ~~[HTTP mode 2/5: route coverage](https://github.com/Hzxon/test-entity/issues/34)~~ done | v1 |
+| 13 | ~~[HTTP mode 3/5: differential gate](https://github.com/Hzxon/test-entity/issues/35)~~ done | v1 |
+| 14 | ~~[HTTP mode 4/5: example pair and e2e](https://github.com/Hzxon/test-entity/issues/36)~~ done | v1 |
+| 15 | ~~[HTTP mode 5/5: docker compose start](https://github.com/Hzxon/test-entity/issues/37)~~ done | v1 |
 | 9 | [Baseline coverage: only hidden tests that pass at base](https://github.com/Hzxon/test-entity/issues/27) | v1 |
 | 10 | ~~[JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28)~~ done | v1 |
 

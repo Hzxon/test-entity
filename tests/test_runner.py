@@ -8,6 +8,7 @@ import pytest
 
 from testgate import runner
 from testgate.core import ProjectConfig
+from testgate.languages.python import PythonLanguage
 from testgate.sandbox import Sandbox, build_sandbox, destroy
 
 
@@ -37,6 +38,7 @@ def make_sb(tmp_path: Path) -> Iterator:
     def factory(test_files: dict[str, dict[str, str]]) -> tuple[Sandbox, ProjectConfig]:
         cfg, tests = make_project(tmp_path, test_files)
         box = build_sandbox(cfg, sys.executable, tests)
+        PythonLanguage().prepare_sandbox(box, cfg, cfg.root)
         boxes.append(box)
         return box, cfg
 

@@ -1,8 +1,9 @@
-"""gates: each gate against fake gitinfo / sandbox / runner / mutator."""
+"""gates: each gate against fake gitinfo / sandbox / language adapter."""
 
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,8 +11,6 @@ from typing import Any
 import pytest
 
 pytest.importorskip("testgate.sandbox")
-pytest.importorskip("testgate.runner")
-pytest.importorskip("testgate.mutator")
 pytest.importorskip("testgate.gitinfo")
 
 from testgate import gates
@@ -25,6 +24,7 @@ from testgate.core import (
     Status,
 )
 from testgate.core import TestRun as _TestRun
+from testgate.languages.python import PythonLanguage
 
 HIDDEN_NAME = "test_hidden_secret_name"
 
@@ -41,13 +41,25 @@ def tr(
 
 
 class Fakes:
-    """Records sandbox calls; runner results come from `runs` or `decide`."""
+    """Records sandbox calls; it is also the Language adapter installed on the ctx.
+
+    Test results come from `runs` or `decide`.
+    """
+
+    name = "python"
+    source_suffixes = PythonLanguage.source_suffixes
+    test_glob = PythonLanguage.test_glob
+    detection_tokens = PythonLanguage.detection_tokens
 
     def __init__(self) -> None:
         self.builds: list[SimpleNamespace] = []
         self.runs: list[_TestRun] = []
         self.decide: Any = None
-        self.pytest_calls: list[tuple[list[str], list[str] | None]] = []
+        self.pytest_calls: list[tuple[list[str], list[str] | None, bool]] = []
+        self.generate: Any = None
+        self.prepared: list[tuple[Any, Any, Path]] = []
+        self.dests: list[str | None] = []
+        self.build_proc: subprocess.CompletedProcess[str] | None = None
         self.coverage: tuple[_TestRun, CoverageData] = (tr(), CoverageData())
         self.coverage_runs: list[tuple[_TestRun, CoverageData]] = []
         self.coverage_calls: list[tuple[Any, ...]] = []
@@ -61,11 +73,13 @@ class Fakes:
         python: str,
         tests: dict[str, Path],
         overrides: dict[str, str] | None = None,
+        dest: str | None = None,
     ) -> SimpleNamespace:
         sb = SimpleNamespace(
             python="py", root=Path("/nowhere"), test_dirs=tests, overrides=overrides or {}
         )
         self.builds.append(sb)
+        self.dests.append(dest)
         return sb
 
     def run_in_sandbox(
@@ -77,16 +91,41 @@ class Fakes:
     def destroy(self, sb: Any) -> None:
         self.destroyed += 1
 
-    # runner
-    def run_pytest(
+    # language adapter
+    def package_dest(self, cfg: Any) -> str:
+        return f"src/{cfg.import_name}"
+
+    def prepare_sandbox(self, sb: Any, cfg: Any, project_root: Path) -> None:
+        self.prepared.append((sb, cfg, project_root))
+
+    def auto_file_ok(self, path: Path) -> bool:
+        return path.name == "__init__.py" or (
+            path.name.startswith("test_") and path.name.endswith(".py")
+        )
+
+    def build(self, sb: Any, cfg: Any, timeout_s: int) -> subprocess.CompletedProcess[str]:
+        if self.build_proc is not None:
+            return self.build_proc
+        code = self.proc_codes.pop(0) if self.proc_codes else 0
+        return subprocess.CompletedProcess(["build"], code, "so", "se")
+
+    def generate_mutants(
+        self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
+    ) -> list[Mutant]:
+        assert self.generate is not None
+        result: list[Mutant] = self.generate(path, source, lines, seed, max_mutants)
+        return result
+
+    def run_tests(
         self,
         sb: Any,
         names: list[str],
         timeout_s: int,
         seed: str | None,
-        extra_args: list[str] | None = None,
+        files: list[str] | None = None,
+        fail_fast: bool = False,
     ) -> _TestRun:
-        self.pytest_calls.append((names, extra_args))
+        self.pytest_calls.append((names, files, fail_fast))
         if self.decide is not None:
             result: _TestRun = self.decide(sb)
             return result
@@ -99,9 +138,14 @@ class Fakes:
         return self.coverage
 
 
+# The fixture publishes its Fakes here so make_ctx can install it as ctx.language.
+_ACTIVE: Fakes | None = None
+
+
 @pytest.fixture
-def fakes(monkeypatch: pytest.MonkeyPatch) -> Fakes:
-    f = Fakes()
+def fakes(monkeypatch: pytest.MonkeyPatch) -> Iterator[Fakes]:
+    global _ACTIVE
+    f = _ACTIVE = Fakes()
     monkeypatch.setattr(
         gates,
         "sandbox",
@@ -109,10 +153,8 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> Fakes:
             build_sandbox=f.build_sandbox, run_in_sandbox=f.run_in_sandbox, destroy=f.destroy
         ),
     )
-    monkeypatch.setattr(
-        gates, "runner", SimpleNamespace(run_pytest=f.run_pytest, run_coverage=f.run_coverage)
-    )
-    return f
+    yield f
+    _ACTIVE = None
 
 
 def make_ctx(
@@ -138,6 +180,7 @@ def make_ctx(
         seed="s3cret",
         seed_is_secret=True,
         python="python",
+        language=_ACTIVE or Fakes(),
     )
 
 
@@ -306,7 +349,7 @@ def test_hygiene_warn_for_unchanged_files(tmp_path: Path) -> None:
 def test_build_pass_and_fail(tmp_path: Path, fakes: Fakes) -> None:
     ctx = make_ctx(tmp_path)
     assert gates.gate_build(ctx).status is Status.PASS
-    fakes.proc_codes = [0, 1]
+    fakes.proc_codes = [1]
     result = gates.gate_build(ctx)
     assert result.status is Status.FAIL
     assert result.public == {"exit_code": 1}
@@ -451,7 +494,7 @@ def test_coverage_fails_when_tests_fail(tmp_path: Path, fakes: Fakes) -> None:
 # --- mutation ---------------------------------------------------------------
 
 
-def install_mutator(monkeypatch: pytest.MonkeyPatch, per_file: dict[str, int]) -> list[Any]:
+def install_mutator(fakes: Fakes, per_file: dict[str, int]) -> list[Any]:
     calls: list[Any] = []
 
     def generate(
@@ -471,7 +514,7 @@ def install_mutator(monkeypatch: pytest.MonkeyPatch, per_file: dict[str, int]) -
             for i in range(1, per_file.get(path, 0) + 1)
         ]
 
-    monkeypatch.setattr(gates, "mutator", SimpleNamespace(generate_mutants=generate))
+    fakes.generate = generate
     return calls
 
 
@@ -491,7 +534,7 @@ def mutation_ctx(tmp_path: Path, **cfg: Any) -> RunContext:
 def test_mutation_score_survivors_and_dirs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    calls = install_mutator(monkeypatch, {"src/pkg/a.py": 4})
+    calls = install_mutator(fakes, {"src/pkg/a.py": 4})
     ctx = mutation_ctx(tmp_path, mutation_min_score=0.5, mutation_max_shown=1)
     fakes.decide = lambda sb: (
         tr(0) if not sb.overrides or "SURVIVE" in next(iter(sb.overrides.values())) else tr(1, 1, 1)
@@ -508,9 +551,10 @@ def test_mutation_score_survivors_and_dirs(
     assert set(result.public["survivors"][0]) == {"id", "line", "operator", "before", "after"}
     # golden + hidden only, never auto; baseline first without -x, then -x on every mutant
     assert all(list(sb.test_dirs) == ["golden", "hidden"] for sb in fakes.builds)
-    assert fakes.pytest_calls[0] == (["golden", "hidden"], None)
+    assert fakes.pytest_calls[0] == (["golden", "hidden"], None, False)
     assert all(
-        names == ["golden", "hidden"] and extra == ["-x"] for names, extra in fakes.pytest_calls[1:]
+        names == ["golden", "hidden"] and files is None and fail_fast
+        for names, files, fail_fast in fakes.pytest_calls[1:]
     )
     assert len(result.private["mutants"]) == 4
 
@@ -521,7 +565,7 @@ def test_mutation_score_survivors_and_dirs(
 def test_mutation_timeout_counts_as_killed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {"src/pkg/a.py": 2})
+    install_mutator(fakes, {"src/pkg/a.py": 2})
     ctx = mutation_ctx(tmp_path, mutation_min_score=1.0)
     fakes.runs = [tr(0), tr(124, passed=0, timed_out=True)]  # baseline passes, mutants time out
     result = gates.gate_mutation(ctx)
@@ -532,7 +576,7 @@ def test_mutation_timeout_counts_as_killed(
 def test_mutation_no_mutants_skips(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {})
+    install_mutator(fakes, {})
     result = gates.gate_mutation(mutation_ctx(tmp_path))
     assert (result.status, result.summary) == (Status.SKIP, "no eligible lines")
 
@@ -540,7 +584,7 @@ def test_mutation_no_mutants_skips(
 def test_mutation_without_changed_uses_all_covered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    calls = install_mutator(monkeypatch, {})
+    calls = install_mutator(fakes, {})
     ctx = mutation_ctx(tmp_path)
     ctx.changed = []
     gates.gate_mutation(ctx)
@@ -550,7 +594,7 @@ def test_mutation_without_changed_uses_all_covered(
 def test_mutation_total_capped_at_max_mutants(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {"src/pkg/a.py": 4, "src/pkg/b.py": 4})
+    install_mutator(fakes, {"src/pkg/a.py": 4, "src/pkg/b.py": 4})
     ctx = mutation_ctx(tmp_path, mutation_max_mutants=5, mutation_min_score=0.0)
     ctx.shared["coverage"].covered["src/pkg/b.py"] = {1}
     fakes.runs = [tr(0), tr(1, 0, 1)]
@@ -560,7 +604,7 @@ def test_mutation_total_capped_at_max_mutants(
 def test_mutation_runs_coverage_when_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {"src/pkg/a.py": 1})
+    install_mutator(fakes, {"src/pkg/a.py": 1})
     ctx = mutation_ctx(tmp_path)
     ctx.shared.pop("coverage")
     fakes.coverage = (tr(), cov({"src/pkg/a.py": {1}}, {"src/pkg/a.py": {1}}))
@@ -573,7 +617,7 @@ def test_mutation_runs_coverage_when_absent(
 def test_mutation_skips_when_baseline_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {"src/pkg/a.py": 2})
+    install_mutator(fakes, {"src/pkg/a.py": 2})
     ctx = mutation_ctx(tmp_path)
     fakes.runs = [tr(1, 1, 1)]
     result = gates.gate_mutation(ctx)
@@ -585,7 +629,7 @@ def test_mutation_skips_when_baseline_fails(
 def test_mutation_auto_useless_warns_then_blocks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {"src/pkg/a.py": 2})  # line 1 survives, line 2 is killed
+    install_mutator(fakes, {"src/pkg/a.py": 2})  # line 1 survives, line 2 is killed
     ctx = mutation_ctx(tmp_path, mutation_min_score=0.5)
     write(tmp_path, "tests/auto/test_weak.py", "def test_t(): pass\n")
     write(tmp_path, "tests/auto/test_strong.py", "def test_t(): pass\n")
@@ -594,8 +638,8 @@ def test_mutation_auto_useless_warns_then_blocks(
         if not sb.overrides:
             return tr(0)  # baseline
         if list(sb.test_dirs) == ["auto"]:
-            extra = fakes.pytest_calls[-1][1] or []
-            return tr(1, 0, 1) if "tests/auto/test_strong.py" in extra else tr(0)
+            files = fakes.pytest_calls[-1][1] or []
+            return tr(1, 0, 1) if "tests/auto/test_strong.py" in files else tr(0)
         return tr(0) if "SURVIVE" in next(iter(sb.overrides.values())) else tr(1, 0, 1)
 
     fakes.decide = decide
@@ -610,9 +654,10 @@ def test_mutation_auto_useless_warns_then_blocks(
     # auto runs: one per (file, survivor), each on the auto dir only with -x
     auto_calls = [c for c in fakes.pytest_calls if c[0] == []]
     assert sorted(c[1] or [] for c in auto_calls) == [
-        ["tests/auto/test_strong.py", "-x"],
-        ["tests/auto/test_weak.py", "-x"],
+        ["tests/auto/test_strong.py"],
+        ["tests/auto/test_weak.py"],
     ]
+    assert all(c[2] for c in auto_calls)
 
     ctx.config.mutation_auto_useless_blocks = True
     assert gates.gate_mutation(ctx).status is Status.FAIL
@@ -621,7 +666,7 @@ def test_mutation_auto_useless_warns_then_blocks(
 def test_mutation_no_survivors_skips_auto_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
-    install_mutator(monkeypatch, {"src/pkg/a.py": 1})
+    install_mutator(fakes, {"src/pkg/a.py": 1})
     ctx = mutation_ctx(tmp_path, mutation_min_score=0.5)
     write(tmp_path, "tests/auto/test_weak.py", "def test_t(): pass\n")
     fakes.decide = lambda sb: tr(0) if not sb.overrides else tr(1, 0, 1)
@@ -661,7 +706,11 @@ def test_coverage_baseline_drop(
     assert ctx.shared["baseline_coverage"] is baseline
     assert calls == [("main", ["src/pkg", "tests/golden", "tests/auto"])]
     # baseline sandbox: golden from the archive, hidden from the current run, no auto (absent at base)
-    base_root = fakes.coverage_calls[1][4]
+    base_root = fakes.builds[1].test_dirs["golden"].parents[1]
+    assert base_root != ctx.config.root
+    # the language gets the real root, and package_dest comes from the adapter
+    assert [p for _, _, p in fakes.prepared] == [ctx.config.root] * 2
+    assert fakes.dests == ["src/pkg"] * 2
     assert list(fakes.builds[1].test_dirs) == ["golden", "hidden"]
     assert fakes.builds[1].test_dirs["golden"] == base_root / "tests/golden"
     assert fakes.builds[1].test_dirs["hidden"] == ctx.hidden_dir
@@ -704,7 +753,7 @@ def test_mutation_parallel_jobs_give_same_report(
     import threading
     import time
 
-    install_mutator(monkeypatch, {"src/pkg/a.py": 4})
+    install_mutator(fakes, {"src/pkg/a.py": 4})
     seen: list[str] = []
     lock = threading.Lock()
 

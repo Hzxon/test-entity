@@ -16,4 +16,11 @@ jobs:
       - run: uv sync --extra dev --python ${{ matrix.python-version }}
       - run: uv run ruff check .
       - run: uv run mypy src/testgate
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: examples/discount-js
+      - run: npm ci
+        working-directory: examples/discount-js-cheat
       - run: uv run pytest -q

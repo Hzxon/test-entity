@@ -11,7 +11,7 @@ import enum
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 
 class Status(str, enum.Enum):
@@ -41,7 +41,8 @@ class ProjectConfig:
 
     root: Path  # absolute project root (the directory holding testgate.yaml)
     package: str  # source root to copy into the sandbox, e.g. "src/discount" or "discount"
-    import_name: str  # top-level module the build gate imports, e.g. "discount"
+    import_name: str  # top-level module the build gate imports, e.g. "discount"; js: entry file
+    language: str = "python"  # "python" | "js"; picks the adapter in languages/
     golden: str = "tests/golden"  # protected, visible tests
     auto: str = "tests/auto"  # agent-writable, visible tests
     hidden: str | None = None  # local path to hidden tests (may be outside root); overrides env
@@ -91,6 +92,7 @@ class RunContext:
     seed: str  # secret seed if the env var is set, else a per-run random seed
     seed_is_secret: bool
     python: str  # interpreter path used inside the sandbox
+    language: Any = None  # the Language adapter (typed Any: core must not import languages/)
     private_log: list[str] = field(default_factory=list)  # full detail; never shown to the author
     shared: dict[str, Any] = field(default_factory=dict)  # gate-to-gate hand-off (coverage data)
 
@@ -197,6 +199,47 @@ class Report:
                 for g in self.gates
             ],
         }
+
+
+@dataclass
+class Sandbox:
+    """A fresh temp root holding the package copy and the chosen test dirs."""
+
+    root: Path  # temp dir
+    src_root: Path  # <root>/<package_dest>
+    test_dirs: dict[str, Path]  # name -> <root>/tests/<name>
+    python: str
+    env: dict[str, str]
+    network: bool
+
+
+class Language(Protocol):
+    """Everything language-specific. See CONTRACT.md, "Language adapters"."""
+
+    name: str
+    source_suffixes: tuple[str, ...]
+    test_glob: str
+    detection_tokens: tuple[str, ...]
+
+    def package_dest(self, cfg: ProjectConfig) -> str: ...
+    def prepare_sandbox(self, sb: Sandbox, cfg: ProjectConfig, project_root: Path) -> None: ...
+    def auto_file_ok(self, path: Path) -> bool: ...
+    def build(self, sb: Sandbox, cfg: ProjectConfig, timeout_s: int) -> Any: ...
+    def run_tests(
+        self,
+        sb: Sandbox,
+        names: list[str],
+        timeout_s: int,
+        seed: str,
+        files: list[str] | None = None,
+        fail_fast: bool = False,
+    ) -> TestRun: ...
+    def run_coverage(
+        self, sb: Sandbox, names: list[str], timeout_s: int, seed: str, repo_package: str
+    ) -> tuple[TestRun, CoverageData]: ...
+    def generate_mutants(
+        self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
+    ) -> list[Mutant]: ...
 
 
 class GateError(Exception):

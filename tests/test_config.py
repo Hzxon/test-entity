@@ -51,6 +51,7 @@ def test_defaults(tmp_path: Path) -> None:
     cfg = load_config(tmp_path, None)
     assert cfg.package == "src/pkg"
     assert cfg.import_name == "pkg"
+    assert cfg.language == "python"
     assert cfg.repeats == 5
     assert cfg.gates["mutation"] is True
     assert cfg.raw["_source"] == "worktree"
@@ -193,4 +194,18 @@ def test_mutation_jobs_key(tmp_path: Path) -> None:
         "package: src/p\nimport_name: p\ngates:\n  mutation:\n    jobs: 0\n"
     )
     with pytest.raises(GateError, match="jobs"):
+        load_config(tmp_path, None)
+
+
+def test_language_key_accepted(tmp_path: Path) -> None:
+    write(tmp_path, MINIMAL + "language: js\n")
+    assert load_config(tmp_path, None).language == "js"
+    write(tmp_path, MINIMAL + "language: python\n")
+    assert load_config(tmp_path, None).language == "python"
+
+
+@pytest.mark.parametrize("value", ["ruby", "''", "3", "[js]"])
+def test_language_key_rejected(tmp_path: Path, value: str) -> None:
+    write(tmp_path, MINIMAL + f"language: {value}\n")
+    with pytest.raises(GateError, match="language"):
         load_config(tmp_path, None)

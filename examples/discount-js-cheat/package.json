@@ -1,0 +1,10 @@
+{
+  "name": "discount-js-cheat",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "fast-check": "^3.0.0"
+  }
+}

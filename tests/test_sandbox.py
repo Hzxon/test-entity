@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from testgate.core import ProjectConfig
+from testgate.languages.python import PythonLanguage
 from testgate.sandbox import Sandbox, build_sandbox, destroy, run_in_sandbox
 
 EXPECTED_ENV_KEYS = {
@@ -44,13 +45,15 @@ def project(tmp_path: Path) -> tuple[ProjectConfig, dict[str, Path]]:
 def sb(project: tuple[ProjectConfig, dict[str, Path]]):
     cfg, tests = project
     box = build_sandbox(cfg, sys.executable, tests)
+    PythonLanguage().prepare_sandbox(box, cfg, cfg.root)
     yield box
     destroy(box)
 
 
 def test_layout(sb: Sandbox) -> None:
     assert sb.root.name.startswith("testgate-")
-    assert (sb.src_root / "mypkg" / "calc.py").is_file()
+    assert sb.src_root == sb.root / "src" / "mypkg"
+    assert (sb.src_root / "calc.py").is_file()
     assert sb.test_dirs["golden"] == sb.root / "tests" / "golden"
     assert (sb.root / "tests" / "golden" / "test_calc.py").is_file()
     assert (sb.root / "tests" / "golden" / "data.json").is_file()
@@ -71,7 +74,7 @@ def test_package_renamed_to_import_name(tmp_path: Path) -> None:
     cfg = ProjectConfig(root=root, package="weird-dir", import_name="named")
     box = build_sandbox(cfg, sys.executable, {})
     try:
-        assert (box.src_root / "named" / "__init__.py").is_file()
+        assert (box.src_root / "__init__.py").is_file()
     finally:
         destroy(box)
 
@@ -80,7 +83,7 @@ def test_overrides_written(project: tuple[ProjectConfig, dict[str, Path]]) -> No
     cfg, tests = project
     box = build_sandbox(cfg, sys.executable, tests, overrides={"src/mypkg/calc.py": "X = 1\n"})
     try:
-        assert (box.src_root / "mypkg" / "calc.py").read_text() == "X = 1\n"
+        assert (box.src_root / "calc.py").read_text() == "X = 1\n"
         # original untouched
         assert "def add" in (cfg.root / "src" / "mypkg" / "calc.py").read_text()
     finally:
@@ -132,6 +135,7 @@ def test_network_allowed_when_enabled(project: tuple[ProjectConfig, dict[str, Pa
     cfg, tests = project
     cfg.network = True
     box = build_sandbox(cfg, sys.executable, tests)
+    PythonLanguage().prepare_sandbox(box, cfg, cfg.root)
     try:
         assert not (box.root / "sitecustomize.py").exists()
         proc = run_in_sandbox(
@@ -163,3 +167,17 @@ def test_destroy_removes_root(project: tuple[ProjectConfig, dict[str, Path]]) ->
     destroy(box)
     assert not box.root.exists()
     destroy(box)  # idempotent
+
+
+def test_custom_dest_and_overrides(project: tuple[ProjectConfig, dict[str, Path]]) -> None:
+    cfg, tests = project
+    box = build_sandbox(
+        cfg, sys.executable, tests, overrides={"src/mypkg/calc.py": "X = 1\n"}, dest="lib"
+    )
+    try:
+        assert box.src_root == box.root / "lib"
+        assert (box.src_root / "calc.py").read_text() == "X = 1\n"
+        assert not (box.root / "pytest.ini").exists()  # language files come from the adapter
+        assert box.env["PYTHONPATH"] == f"{box.root}:{box.root / 'src'}"
+    finally:
+        destroy(box)

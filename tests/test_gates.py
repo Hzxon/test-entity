@@ -78,6 +78,9 @@ class Fakes:
         sb = SimpleNamespace(
             python="py", root=Path("/nowhere"), test_dirs=tests, overrides=overrides or {}
         )
+        # snapshot the hidden dir's files: the gate removes its temp copies afterwards
+        hidden = tests.get("hidden")
+        sb.hidden_files = sorted(p.name for p in hidden.glob("*.py")) if hidden else []
         self.builds.append(sb)
         self.dests.append(dest)
         return sb
@@ -108,6 +111,13 @@ class Fakes:
             return self.build_proc
         code = self.proc_codes.pop(0) if self.proc_codes else 0
         return subprocess.CompletedProcess(["build"], code, "so", "se")
+
+    def failed_files(self, run: _TestRun) -> set[str]:
+        return {
+            line.split()[1].split("::")[0]
+            for line in run.output.splitlines()
+            if line.startswith(("FAILED ", "ERROR "))
+        }
 
     def generate_mutants(
         self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
@@ -698,26 +708,77 @@ def test_coverage_baseline_drop(
     current = cov({"src/pkg/a.py": {1, 2, 3, 4}}, {"src/pkg/a.py": {1, 2}})
     baseline = cov({"src/pkg/a.py": {1, 2, 3, 4}}, {"src/pkg/a.py": {1, 2, 3, 4}})
     fakes.coverage_runs = [(tr(), current), (tr(), baseline)]
+    fakes.runs = [tr(0)]  # the hidden suite passes against the base ref
     result = gates.gate_coverage(ctx)
     assert result.status is Status.FAIL
     assert "dropped 50.0% from 100%" in result.summary
     assert result.public["baseline_total"] == 1.0
     assert result.public["drop"] == 0.5
+    assert result.public["baseline_hidden_excluded"] == 0
     assert ctx.shared["baseline_coverage"] is baseline
     assert calls == [("main", ["src/pkg", "tests/golden", "tests/auto"])]
-    # baseline sandbox: golden from the archive, hidden from the current run, no auto (absent at base)
-    base_root = fakes.builds[1].test_dirs["golden"].parents[1]
+    # builds: current coverage, hidden-at-base probe, baseline coverage
+    assert list(fakes.builds[1].test_dirs) == ["hidden"]
+    base_root = fakes.builds[2].test_dirs["golden"].parents[1]
     assert base_root != ctx.config.root
     # the language gets the real root, and package_dest comes from the adapter
-    assert [p for _, _, p in fakes.prepared] == [ctx.config.root] * 2
-    assert fakes.dests == ["src/pkg"] * 2
-    assert list(fakes.builds[1].test_dirs) == ["golden", "hidden"]
-    assert fakes.builds[1].test_dirs["golden"] == base_root / "tests/golden"
-    assert fakes.builds[1].test_dirs["hidden"] == ctx.hidden_dir
+    assert [p for _, _, p in fakes.prepared] == [ctx.config.root] * 3
+    assert fakes.dests == ["src/pkg"] * 3
+    assert list(fakes.builds[2].test_dirs) == ["golden", "hidden"]
+    assert fakes.builds[2].test_dirs["golden"] == base_root / "tests/golden"
+    assert fakes.builds[2].test_dirs["hidden"] == ctx.hidden_dir
 
     ctx.config.coverage_max_drop = 0.5
     fakes.coverage_runs = [(tr(), current), (tr(), baseline)]
+    fakes.runs = [tr(0)]
     assert gates.gate_coverage(ctx).status is Status.PASS
+
+
+def test_coverage_baseline_excludes_hidden_files_failing_at_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_archive(monkeypatch, ["src/pkg", "tests/golden"])
+    ctx = make_ctx(tmp_path, coverage_min_changed=0.0)
+    assert ctx.hidden_dir is not None
+    (ctx.hidden_dir / "test_old.py").write_text("def test_o(): pass\n")
+    (ctx.hidden_dir / "test_new.py").write_text("def test_n(): pass\n")  # covers code main lacks
+    current = cov({"src/pkg/a.py": {1, 2}}, {"src/pkg/a.py": {1, 2}})
+    baseline = cov({"src/pkg/a.py": {1, 2}}, {"src/pkg/a.py": {1}})
+    fakes.coverage_runs = [(tr(), current), (tr(), baseline)]
+    fakes.runs = [
+        tr(
+            1,
+            1,
+            1,
+            output="PASSED tests/hidden/test_old.py::test_o\nFAILED tests/hidden/test_new.py::test_n - ImportError\n",
+        )
+    ]
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.PASS  # 50% -> 100% is a rise, not a drop
+    assert result.public["baseline_hidden_excluded"] == 1
+    assert result.public["drop"] == -0.5
+    assert "baseline_skipped" not in result.public
+    assert fakes.builds[2].test_dirs["hidden"] != ctx.hidden_dir
+    assert fakes.builds[2].hidden_files == ["test_old.py"]
+    assert any("test_new.py" in line for line in ctx.private_log)
+
+
+def test_coverage_baseline_no_hidden_left_at_base_falls_back_to_golden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_archive(monkeypatch, ["src/pkg", "tests/golden"])
+    ctx = make_ctx(tmp_path, coverage_min_changed=0.0)
+    assert ctx.hidden_dir is not None
+    (ctx.hidden_dir / "test_new.py").write_text("def test_n(): pass\n")
+    fakes.coverage_runs = [
+        (tr(), cov({"src/pkg/a.py": {1}}, {"src/pkg/a.py": {1}})),
+        (tr(), cov({"src/pkg/a.py": {1}}, {"src/pkg/a.py": {1}})),
+    ]
+    fakes.runs = [tr(1, 0, 1, output="FAILED tests/hidden/test_new.py::test_n\n")]
+    result = gates.gate_coverage(ctx)
+    assert result.public["baseline_hidden_excluded"] == 1
+    assert list(fakes.builds[2].test_dirs) == ["golden"]  # baseline from golden alone
+    assert result.public["drop"] == 0.0
 
 
 def test_coverage_baseline_skipped_reasons(
@@ -733,6 +794,7 @@ def test_coverage_baseline_skipped_reasons(
 
     install_archive(monkeypatch, ["src/pkg", "tests/golden"])
     fakes.coverage_runs = [fakes.coverage, (tr(1, 0, 1), CoverageData())]
+    fakes.runs = [tr(0)]
     assert gates.gate_coverage(ctx).public["baseline_skipped"] == "tests fail at base ref"
 
     ctx.base_ref = None

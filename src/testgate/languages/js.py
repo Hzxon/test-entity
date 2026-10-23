@@ -165,8 +165,15 @@ class JsLanguage:
             skipped = int(data.get("numPendingTests", 0)) + int(data.get("numTodoTests", 0))
             errors = int(data.get("numFailedTestSuites", 0))
             for suite in data.get("testResults", []):
+                rel = _rel_to(sb.root, str(suite.get("name", "")))
+                if suite.get("status") not in (None, "passed") and not suite.get(
+                    "assertionResults"
+                ):
+                    details.append(f"ERROR {rel}")  # suite failed to load
                 for case in suite.get("assertionResults", []):
-                    details.append(f"{case.get('status', '?').upper()} {case.get('fullName', '')}")
+                    details.append(
+                        f"{case.get('status', '?').upper()} {rel}::{case.get('fullName', '')}"
+                    )
                     details.extend(str(m) for m in case.get("failureMessages", []))
                 if suite.get("message"):
                     details.append(str(suite["message"]))
@@ -217,6 +224,9 @@ class JsLanguage:
                 raise GateError("@vitest/coverage-v8 is not installed; add it to devDependencies")
             return run, CoverageData()
         return run, _parse_coverage(report, sb.root / dest, repo_package)
+
+    def failed_files(self, run: TestRun) -> set[str]:
+        return {m.group(1) for m in _FAILED_LINE.finditer(run.output)}
 
     def _dest(self, sb: Sandbox) -> str:
         return sb.src_root.relative_to(sb.root).as_posix()
@@ -324,6 +334,16 @@ _ARID = re.compile(r"console\.|logger\.|debug\(|\.log\(")
 _IMPORT = re.compile(r"^\s*(import\b(?!\s*\()|export\b.*\bfrom\b)")
 _COMMENT = ("//", "/*", "*")
 _THROW_CALL = re.compile(r"\bthrow\b.*\(")
+_FAILED_LINE = re.compile(r"^(?:FAILED|ERROR) (\S+?)(?:::|\s|$)", re.MULTILINE)
+
+
+def _rel_to(root: Path, file: str) -> str:
+    try:
+        return Path(file).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return file
+
+
 # A bare call statement: its string arguments are labels or messages, not behaviour.
 _CALL_STMT = re.compile(r"^\s*[\w.$]+\(.*\);?\s*$")
 

@@ -240,6 +240,9 @@ class Language(Protocol):
     def generate_mutants(
         self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
     ) -> list[Mutant]: ...
+    def failed_files(self, run: TestRun) -> set[str]:
+        ...
+        # test files (sandbox-relative, e.g. "tests/hidden/test_x.py") with a failure or error in `run`
 
 
 class GateError(Exception):

@@ -315,30 +315,62 @@ def _measure_coverage(ctx: RunContext) -> tuple[TestRun, CoverageData]:
     return run, data
 
 
-def _baseline_coverage(ctx: RunContext) -> tuple[CoverageData | None, str]:
+def _hidden_passing_at_base(
+    ctx: RunContext, base_cfg: ProjectConfig, tmp: Path
+) -> tuple[Path | None, int]:
+    """Copy of the hidden dir without the test files that fail against the base ref.
+
+    Returns (dir or None when nothing passes, number of files excluded).
+    """
+    assert ctx.hidden_dir is not None
+    sb = _sandbox(ctx, {"hidden": ctx.hidden_dir}, cfg=base_cfg)
+    try:
+        run = ctx.language.run_tests(sb, ["hidden"], ctx.config.timeout_s, ctx.seed)
+    finally:
+        sandbox.destroy(sb)
+    ctx.log(f"hidden at base exit={run.exit_code}\n{run.output}")
+    if run.ok:
+        return ctx.hidden_dir, 0
+    failed = {Path(f).name for f in ctx.language.failed_files(run)}
+    if not failed:
+        return None, 0  # failed for a reason we cannot attribute to files
+    filtered = tmp / "hidden-at-base"
+    shutil.copytree(
+        ctx.hidden_dir, filtered, ignore=lambda _d, names: [n for n in names if n in failed]
+    )
+    remaining = [p for p in filtered.rglob(ctx.language.test_glob) if p.is_file()]
+    ctx.log(f"hidden files excluded at base: {sorted(failed)}")
+    return (filtered if remaining else None), len(failed)
+
+
+def _baseline_coverage(ctx: RunContext) -> tuple[CoverageData | None, str, int]:
     """Coverage of the package as it is at the base ref, with the same test dirs.
 
     Golden and auto tests come from the base ref; hidden tests are the current
-    ones, since they live outside the repository. Returns (data, reason) where
-    data is None when no comparison is possible.
+    ones minus the files that fail against the base ref (#25), since they live
+    outside the repository and may cover code the base ref lacks. Returns
+    (data, reason, excluded hidden files); data is None when no comparison is possible.
     """
     cfg = ctx.config
     if ctx.base_ref is None:
-        return None, "no base ref"
+        return None, "no base ref", 0
     tmp = Path(tempfile.mkdtemp(prefix="testgate-base-"))
     try:
         present = gitinfo.archive(cfg.root, ctx.base_ref, [cfg.package, cfg.golden, cfg.auto], tmp)
         if cfg.package not in present:
-            return None, "package absent at base ref"
+            return None, "package absent at base ref", 0
         base_cfg = dataclasses.replace(cfg, root=tmp)
         dirs: dict[str, Path] = {}
         for name, rel in (("golden", cfg.golden), ("auto", cfg.auto)):
             if rel in present and (tmp / rel).is_dir():
                 dirs[name] = tmp / rel
+        excluded = 0
         if ctx.hidden_dir is not None:
-            dirs["hidden"] = ctx.hidden_dir
+            hidden, excluded = _hidden_passing_at_base(ctx, base_cfg, tmp)
+            if hidden is not None:
+                dirs["hidden"] = hidden
         if not dirs:
-            return None, "no tests at base ref"
+            return None, "no tests at base ref", excluded
         sb = _sandbox(ctx, dirs, cfg=base_cfg)
         try:
             run, data = ctx.language.run_coverage(
@@ -348,9 +380,9 @@ def _baseline_coverage(ctx: RunContext) -> tuple[CoverageData | None, str]:
             sandbox.destroy(sb)
         ctx.log(f"baseline coverage exit={run.exit_code}\n{run.output}")
         if not run.ok:
-            return None, "tests fail at base ref"
+            return None, "tests fail at base ref", excluded
         ctx.shared["baseline_coverage"] = data
-        return data, "ok"
+        return data, "ok", excluded
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -386,7 +418,8 @@ def gate_coverage(ctx: RunContext) -> GateResult:
     problems: list[str] = []
     if not run.ok:
         problems.append("tests failed under coverage")
-    baseline, reason = _baseline_coverage(ctx)
+    baseline, reason, excluded = _baseline_coverage(ctx)
+    public["baseline_hidden_excluded"] = excluded  # count only; file names stay private
     if baseline is None:
         public["baseline_total"] = None
         public["drop"] = None

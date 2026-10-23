@@ -65,13 +65,13 @@ The action uploads `testgate-private.log` as the `testgate-private` artifact and
 | language | tests | property tests | coverage | mutation | build check |
 |---|---|---|---|---|---|
 | `python` (default) | pytest in a fresh root, `--noconftest` | Hypothesis with `--hypothesis-seed` | coverage.py | AST mutator, one mutant per changed covered line | `import <pkg>` + `compileall` |
-| `js` | vitest, JSON reporter, positional test filters | fast-check seeded through `TESTGATE_FC_SEED` | `@vitest/coverage-v8` | textual mutator, `node --check` per mutant | `node --check` per source file |
+| `js` | vitest, JSON reporter, positional test filters | fast-check seeded through `TESTGATE_FC_SEED` | `@vitest/coverage-v8` | textual mutator, `node --check` per mutant | `node --check` per `.js` file, plus `tsc --noEmit` when `tsconfig.json` exists |
 
 JS sandboxes symlink the project's `node_modules`, copy `package.json`, and block the network with a `--require` preload (`localhost` DNS stays allowed so vitest can start). Hidden tests import sources as if they lived in `tests/hidden/` of the project.
 
 ## Limits
 
-- Languages: Python (pytest, Hypothesis, AST mutator) and JavaScript/TypeScript (vitest, fast-check, a line-based textual mutator; `node --check` validates each mutant, `.ts` sources are not syntax-checked). Set `language: js` in `testgate.yaml`; the project must have run `npm ci` before the gate runs, and needs `vitest` and `@vitest/coverage-v8` in devDependencies.
+- Languages: Python (pytest, Hypothesis, AST mutator) and JavaScript/TypeScript (vitest, fast-check, a line-based textual mutator; `node --check` validates each mutant; with a `tsconfig.json` the build gate also runs `tsc --noEmit`, so `typescript` must be a devDependency). Set `language: js` in `testgate.yaml`; the project must have run `npm ci` before the gate runs, and needs `vitest` and `@vitest/coverage-v8` in devDependencies.
 - Mutation testing runs golden + hidden once per mutant. Runs are parallel (`mutation.jobs`, default half the CPUs); use `max_mutants` and `timeout_s` to bound large changes.
 - Baseline coverage comparison needs a base ref; `--no-git` runs only check the fixed thresholds. Changed-line coverage is checked against a fixed threshold.
 - The sandbox is a subprocess with a scrubbed environment and blocked sockets. It is not a container.

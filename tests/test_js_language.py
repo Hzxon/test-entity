@@ -44,6 +44,7 @@ def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "vitest@3",
             "@vitest/coverage-v8@3",
             "fast-check@3",
+            "typescript@5",
         ],
         cwd=d,
         capture_output=True,
@@ -217,6 +218,59 @@ def test_build_ok_and_syntax_error(sb: Sandbox, project: Path) -> None:
     assert LANG.build(sb, cfg, 60).returncode == 0
     (sb.src_root / "broken.js").write_text("export function (\n")
     assert LANG.build(sb, cfg, 60).returncode != 0
+
+
+TSCONFIG = json.dumps(
+    {
+        "compilerOptions": {
+            "strict": True,
+            "noEmit": True,
+            "module": "esnext",
+            "moduleResolution": "bundler",
+            "target": "es2020",
+            "skipLibCheck": True,
+            "types": [],
+        },
+        "include": ["src"],
+    }
+)
+
+
+def test_build_runs_tsc_when_tsconfig_exists(project: Path, tmp_path: Path) -> None:
+    (project / "tsconfig.json").write_text(TSCONFIG)
+    (project / "src" / "typed.ts").write_text("export const n: number = 1;\n")
+    box = make_sandbox(project, tmp_path)
+    box.env["PATH"] = f"{Path(shutil.which('node')).parent}:{box.env['PATH']}"
+    LANG.prepare_sandbox(box, config(project), project)
+    assert (box.root / "tsconfig.json").is_file()
+    ok = LANG.build(box, config(project), 120)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    (box.src_root / "typed.ts").write_text("export const n: number = 'one';\n")
+    bad = LANG.build(box, config(project), 120)
+    assert bad.returncode != 0
+    assert "TS2322" in bad.stdout  # Type 'string' is not assignable to type 'number'
+
+
+def test_build_errors_when_tsconfig_but_no_typescript(project: Path, tmp_path: Path) -> None:
+    (project / "tsconfig.json").write_text(TSCONFIG)
+    bare = tmp_path / "bare"
+    (bare / "node_modules").mkdir(parents=True)  # no typescript inside
+    (bare / "src").mkdir()
+    (bare / "src" / "m.js").write_text(M_JS)
+    (bare / "package.json").write_text('{"name": "b", "type": "module"}')
+    shutil.copy2(project / "tsconfig.json", bare / "tsconfig.json")
+    box = Sandbox(
+        root=tmp_path / "sb2",
+        src_root=tmp_path / "sb2" / "src",
+        test_dirs={},
+        python=sys.executable,
+        env={"PATH": f"{Path(shutil.which('node')).parent}:/usr/bin:/bin", "HOME": str(tmp_path)},
+        network=False,
+    )
+    shutil.copytree(bare / "src", box.src_root)
+    LANG.prepare_sandbox(box, config(bare), bare)
+    with pytest.raises(GateError, match="typescript"):
+        LANG.build(box, config(bare), 120)
 
 
 def test_build_no_files_succeeds(sb: Sandbox, project: Path) -> None:

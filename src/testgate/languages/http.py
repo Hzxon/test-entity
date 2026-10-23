@@ -9,13 +9,16 @@ without a socket. Only ``_Service`` and ``_send_http`` touch the network.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import random
 import re
+import shutil
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -27,15 +30,17 @@ from typing import Any
 import jsonschema
 import yaml
 
-from testgate import gitinfo
+from testgate import gitinfo, sandbox
 from testgate.core import (
     ChangedFile,
     CoverageData,
     GateError,
+    GateResult,
     Mutant,
     ProjectConfig,
     RunContext,
     Sandbox,
+    Status,
     TestRun,
 )
 
@@ -267,6 +272,31 @@ def _route_key(openapi: str, route: str) -> str:
     return f"{openapi}#{route}"
 
 
+# --- differential (#35) ---------------------------------------------------------
+
+
+def same_response(a: Response, b: Response) -> bool:
+    """Equal status and body; JSON bodies compare structurally so key order does not matter."""
+    if a.status != b.status:
+        return False
+    try:
+        return bool(json.loads(a.body or b"null") == json.loads(b.body or b"null"))
+    except ValueError:
+        return a.body == b.body
+
+
+def unchanged_cases(
+    cases: list[Case], routes: dict[str, Any], changed: set[str]
+) -> list[tuple[Case, str]]:
+    """(case, route) pairs whose route is in the document and not among the changed ones."""
+    out: list[tuple[Case, str]] = []
+    for case in cases:
+        route = match_route(routes, case.method, case.path)
+        if route is not None and route not in changed:
+            out.append((case, route))
+    return out
+
+
 # --- transport and service ----------------------------------------------------
 
 
@@ -343,6 +373,11 @@ class _Service:
             return self.log.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
+
+
+def ctx_path(ctx: RunContext, sb: Sandbox) -> str:
+    """PATH for a service sandbox: the interpreter's directory first, then the sandbox default."""
+    return f"{Path(ctx.python).parent}:{sb.env.get('PATH', '')}"
 
 
 # --- the adapter ----------------------------------------------------------------
@@ -505,7 +540,124 @@ class HttpLanguage:
     def generate_mutants(
         self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
     ) -> list[Mutant]:
-        return []  # the differential gate (issue #35) replaces mutation for http mode
+        return []  # mutation_gate replaces mutation for http mode
+
+    def mutation_gate(self, ctx: RunContext) -> GateResult:
+        """Differential run: fixtures on unchanged routes must get identical answers from
+        the base ref's service and the head's. A difference is a surviving "mutant"."""
+        cfg = ctx.config
+        name = "mutation"
+        if ctx.base_ref is None:
+            return GateResult(name, Status.SKIP, "skipped: no base ref")
+        if not cfg.http_openapi:
+            return GateResult(
+                name, Status.SKIP, "skipped: no openapi document to tell changed routes"
+            )
+        changed_units = self.changed_units(ctx) or []
+        changed = {c.path.split("#", 1)[1] for c in changed_units}
+        tmp = Path(tempfile.mkdtemp(prefix="testgate-base-"))
+        head: _Service | None = None
+        base: _Service | None = None
+        boxes: list[Sandbox] = []
+        try:
+            present = gitinfo.archive(cfg.root, ctx.base_ref, [cfg.package], tmp)
+            if cfg.package not in present:
+                return GateResult(name, Status.SKIP, "skipped: package absent at base ref")
+            dirs = {"golden": cfg.root / cfg.golden}
+            if ctx.hidden_dir is not None:
+                dirs["hidden"] = ctx.hidden_dir
+            dirs = {k: v for k, v in dirs.items() if v.is_dir()}
+            head_sb = sandbox.build_sandbox(cfg, ctx.python, dirs, dest=self.package_dest(cfg))
+            base_cfg = dataclasses.replace(cfg, root=tmp)
+            base_sb = sandbox.build_sandbox(base_cfg, ctx.python, {}, dest=self.package_dest(cfg))
+            boxes = [head_sb, base_sb]
+            for sb in boxes:
+                sb.env["PATH"] = ctx_path(ctx, sb)
+                self.prepare_sandbox(sb, cfg, cfg.root)
+            routes = load_routes((head_sb.src_root / cfg.http_openapi).read_text(encoding="utf-8"))
+            cases, _ = load_cases(head_sb.root, self._files(head_sb, list(dirs), None), ctx.seed)
+            pairs = unchanged_cases(cases, routes, changed)
+            if not pairs:
+                return GateResult(
+                    name,
+                    Status.SKIP,
+                    "skipped: no fixture targets an unchanged route",
+                    {"changed_routes": len(changed)},
+                )
+            self._cfg = cfg
+            head = self._service(head_sb)
+            base = self._service(base_sb)
+            ok, why = head.start(cfg.http_startup_timeout_s)
+            if not ok:
+                return GateResult(
+                    name, Status.ERROR, f"head service: {why}", {}, {"log": head.output()}
+                )
+            ok, why = base.start(cfg.http_startup_timeout_s)
+            if not ok:
+                return GateResult(
+                    name,
+                    Status.SKIP,
+                    "skipped: base ref service never became healthy",
+                    {},
+                    {"log": base.output()},
+                )
+            send_head = _send_http(head.base, 30)
+            send_base = _send_http(base.base, 30)
+            survivors: list[dict[str, Any]] = []
+            private: list[dict[str, Any]] = []
+            identical = 0
+            for i, (case, route) in enumerate(pairs):
+                try:
+                    a, b = send_head(case), send_base(case)
+                except OSError as exc:
+                    private.append({"case": case.name, "route": route, "error": str(exc)})
+                    survivors.append(self._survivor(case, route, i))
+                    continue
+                same = same_response(a, b)
+                identical += same
+                private.append(
+                    {
+                        "case": case.name,
+                        "file": case.file,
+                        "route": route,
+                        "identical": same,
+                        "head": [a.status, a.text()[:500]],
+                        "base": [b.status, b.text()[:500]],
+                    }
+                )
+                if not same:
+                    survivors.append(self._survivor(case, route, i))
+            score = identical / len(pairs)
+            public = {
+                "compared": len(pairs),
+                "identical": identical,
+                "score": round(score, 4),
+                "changed_routes": len(changed),
+                "survivors": survivors[: cfg.mutation_max_shown],
+            }
+            summary = f"differential: {identical}/{len(pairs)} identical on unchanged routes (score {score:.2f})"
+            if score < cfg.mutation_min_score:
+                return GateResult(
+                    name,
+                    Status.FAIL,
+                    f"{summary}, below {cfg.mutation_min_score:.2f}",
+                    public,
+                    {"cases": private},
+                )
+            return GateResult(name, Status.PASS, summary, public, {"cases": private})
+        finally:
+            for svc in (head, base):
+                if svc is not None:
+                    svc.stop()
+            for box in boxes:
+                sandbox.destroy(box)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @staticmethod
+    def _survivor(case: Case, route: str, index: int) -> dict[str, Any]:
+        # hidden case names stay private: identify hidden cases by position only
+        label = case.name if case.file.startswith("tests/golden/") else f"hidden case {index}"
+        return {"route": route, "case": label, "file": case.file.split("/", 2)[1]}
 
     def failed_files(self, run: TestRun) -> set[str]:
         return {m.group(1) for m in _FAILED_LINE.finditer(run.output) if m.group(1) != "service"}

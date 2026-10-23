@@ -102,6 +102,9 @@ class JsLanguage:
         manifest = project_root / "package.json"
         if manifest.is_file():
             shutil.copy2(manifest, sb.root / "package.json")
+        tsconfig = project_root / "tsconfig.json"
+        if tsconfig.is_file():
+            shutil.copy2(tsconfig, sb.root / "tsconfig.json")  # the build gate runs tsc with it
         (sb.root / "vitest.config.mjs").write_text(_VITEST_CONFIG)
         (sb.root / "fc-seed.mjs").write_text(_FC_SEED)
         if not sb.network:
@@ -123,6 +126,15 @@ class JsLanguage:
             last = run_in_sandbox(sb, ["node", "--check", str(f)], timeout_s)
             if last.returncode != 0:
                 return last
+        tsconfig = sb.root / "tsconfig.json"
+        if tsconfig.is_file():
+            # node --check skips .ts files; tsc type-checks the whole project instead
+            tsc = sb.root / "node_modules" / "typescript" / "bin" / "tsc"
+            if not tsc.is_file():
+                raise GateError("typescript is not installed; add it to devDependencies")
+            last = run_in_sandbox(
+                sb, ["node", str(tsc), "--noEmit", "-p", str(tsconfig)], timeout_s
+            )
         return last
 
     def _vitest(

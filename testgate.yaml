@@ -18,10 +18,10 @@ gates:
     required: true
   coverage:
     min_total: 0.0
-    min_changed: 0.0  # golden + hidden are small; the dev suite covers the rest
+    min_changed: 0.5  # ratchet: raised from 0.0 on 2026-10-23 (#24); revisit at each +10 pts of coverage
     max_drop: 0.02
   mutation:
-    min_score: 0.3  # ratchet up as golden + hidden grow
+    min_score: 0.5  # ratchet: raised from 0.3 on 2026-10-23 (#24)
     max_mutants: 8  # each mutant runs golden + hidden; keep CI under a few minutes
     max_shown: 7
     timeout_s: 120

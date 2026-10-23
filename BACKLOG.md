@@ -110,6 +110,8 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | ~~[JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7)~~ done | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
+| 9 | [Baseline coverage: only hidden tests that pass at base](https://github.com/Hzxon/test-entity/issues/27) | v1 |
+| 10 | [JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28) | v1 |
 
 ## Decisions taken
 
@@ -119,7 +121,16 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
   `gates.mutation.auto_useless_blocks: true` makes them block.
 - Scope (2026-10-23): testgate stays a pre-merge gate. No spec-stage, release
   or operations tooling.
+- #11 (2026-10-23): GitHub only; GitLab later as a template if asked.
+- #23 (2026-10-23): agents propose hidden tests by PR; a human merges them.
+- #24 (2026-10-23): self-gate thresholds now `min_changed: 0.5`,
+  `min_score: 0.5`; revisit at each +10 points of golden + hidden coverage.
+  Config PRs land through the one-time bypass ceremony in ADR 0001.
+- #25 (2026-10-23): baseline comparison will use only hidden tests that pass
+  at the base ref (issue #27).
+- #26 (2026-10-23): `tsc --noEmit` in the JS build gate when `tsconfig.json`
+  exists (issue #28).
 
 ## Open questions for the user (`needs-human`)
 
-- [#11 GitHub only, or GitLab CI too?](https://github.com/Hzxon/test-entity/issues/11)
+None.

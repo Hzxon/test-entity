@@ -1,0 +1,23 @@
+language: http
+package: svc
+import_name: app
+tests:
+  golden: tests/golden
+  auto: tests/auto
+  hidden: ../shop-http-hidden
+http:
+  start: [python3, app.py, "{port}"]
+  health: "http://127.0.0.1:{port}/health"
+  startup_timeout_s: 20
+  openapi: openapi.yaml
+gates:
+  protected: false
+  tests:
+    repeats: 2
+  coverage:
+    min_changed: 0.0
+  mutation:
+    min_score: 1.0
+sandbox:
+  network: false
+  timeout_s: 120

@@ -66,6 +66,17 @@ The action uploads `testgate-private.log` as the `testgate-private` artifact and
 |---|---|---|---|---|---|
 | `python` (default) | pytest in a fresh root, `--noconftest` | Hypothesis with `--hypothesis-seed` | coverage.py | AST mutator, one mutant per changed covered line | `import <pkg>` + `compileall` |
 | `js` | vitest, JSON reporter, positional test filters | fast-check seeded through `TESTGATE_FC_SEED` | `@vitest/coverage-v8` | textual mutator, `node --check` per mutant | `node --check` per `.js` file, plus `tsc --noEmit` when `tsconfig.json` exists |
+| `http` | `*.http.yaml` request/expect fixtures replayed by testgate's own runner against the started service | `{{rand:int:a:b}}` / `{{rand:hex:n}}` placeholders filled from the seed | route coverage: routes in `http.openapi` hit by fixtures; `min_changed` applies to routes whose spec changed vs the base ref | differential: the base ref's service runs on a second port and every fixture on an unchanged route must answer identically; a difference is a survivor | start the service, poll the health URL |
+
+HTTP mode (ADR 0002) starts the service from `http.start` with `{port}` substituted, waits for `http.health`, and replays fixtures such as:
+
+```yaml
+- name: discount at the threshold
+  request: {method: POST, path: /price, json: {subtotal: 100}}
+  expect: {status: 200, json: {price: 90.0}}   # json is a subset match
+```
+
+`expect` also takes `headers`, `text` (substring) and `schema` (JSON Schema). `examples/shop-http` and `examples/shop-http-cheat` are the HTTP pair: a stdlib `http.server` shop that needs nothing installed. `http.start` may also be `{compose: compose.yaml, service: shop, port: 8000}`: testgate runs `docker compose up -d --build` in the sandbox copy, asks compose for the published host port, and tears the project down afterwards (`examples/shop-http-compose`). The network block is best effort for the service process: proxy variables point at a dead port, and the sandbox cannot stop a service that ignores them.
 
 JS sandboxes symlink the project's `node_modules`, copy `package.json`, and block the network with a `--require` preload (`localhost` DNS stays allowed so vitest can start). Hidden tests import sources as if they lived in `tests/hidden/` of the project.
 
@@ -75,6 +86,7 @@ JS sandboxes symlink the project's `node_modules`, copy `package.json`, and bloc
 - Mutation testing runs golden + hidden once per mutant. Runs are parallel (`mutation.jobs`, default half the CPUs); use `max_mutants` and `timeout_s` to bound large changes.
 - Baseline coverage comparison needs a base ref; `--no-git` runs only check the fixed thresholds. Changed-line coverage is checked against a fixed threshold.
 - The sandbox is a subprocess with a scrubbed environment and blocked sockets. It is not a container.
+- HTTP mode: route coverage and the differential gate need `http.openapi` (a document inside the package); without it the coverage gate reports 100% and the differential gate is skipped. The differential gate only sees routes that fixtures exercise, and only catches drift on routes whose spec did not change. Services with their own containers run through the compose form; the Docker daemon itself is outside the sandbox, so container networking is not restricted.
 - Equivalent mutants are reduced by rules (Python: clamps, message-only constants, dead assignments; JS: message-only strings in throw/format/bare calls), not detected in general. A survivor can still be equivalent; read the `before`/`after` text before adding a test.
 
 ## Credits

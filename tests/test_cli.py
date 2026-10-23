@@ -270,3 +270,105 @@ def test_run_baseline_survives_hidden_tests_for_new_code(tmp_path: Path) -> None
     assert coverage["baseline_total"] == 1.0
     assert coverage["drop"] is not None
     assert code == 0
+
+
+def test_run_http_mode_changed_routes_need_fixtures(tmp_path: Path) -> None:
+    """HTTP mode: a route added to the spec without a fixture fails min_changed (#34)."""
+    import re
+    import sys
+    import textwrap
+
+    src = (Path(__file__).parent / "test_http_language.py").read_text()
+    service = re.search(r'SERVICE = textwrap.dedent\(\n    """\\\n(.*?)    """\n\)', src, re.DOTALL)
+    spec = re.search(r'OPENAPI = textwrap.dedent\(\n    """\\\n(.*?)    """\n\)', src, re.DOTALL)
+    assert service and spec
+    root = tmp_path / "proj"
+    (root / "svc").mkdir(parents=True)
+    (root / "tests" / "golden").mkdir(parents=True)
+    (root / "svc" / "app.py").write_text(textwrap.dedent(service.group(1)))
+    (root / "svc" / "openapi.yaml").write_text(textwrap.dedent(spec.group(1)))
+    (root / "tests" / "golden" / "p.http.yaml").write_text(
+        "- name: price\n  request: {method: POST, path: /price, json: {subtotal: 100}}\n  expect: {status: 200}\n"
+    )
+    (root / "testgate.yaml").write_text(
+        "language: http\npackage: svc\nimport_name: app\nprotected: []\n"
+        f"http:\n  start: ['{sys.executable}', app.py, '{{port}}']\n"
+        "  health: 'http://127.0.0.1:{port}/health'\n  startup_timeout_s: 15\n  openapi: openapi.yaml\n"
+        "gates:\n  hidden: {required: false}\n  tests: {repeats: 1}\n"
+        "  coverage: {min_changed: 1.0, max_drop: 1.0}\n  mutation: false\n"
+    )
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    # the PR adds a route nobody fixtures
+    with (root / "svc" / "openapi.yaml").open("a") as f:
+        f.write("  /refunds:\n    post: {summary: refund}\n")
+    out = tmp_path / "out.json"
+    code = main(["run", "--root", str(root), "--base", "main", "--json", str(out), "--quiet"])
+    report = json.loads(out.read_text())
+    coverage = next(g for g in report["gates"] if g["name"] == "coverage")
+    assert coverage["status"] == "fail"
+    assert coverage["changed"] == 0.0
+    assert coverage["uncovered_changed"] == ["openapi.yaml#POST /refunds:1"]
+    assert coverage["baseline_total"] == 0.2  # 1 of 5 routes hit at base
+    assert code == 1
+
+
+def _http_project(tmp_path: Path) -> Path:
+    """A git repo with the stdlib shop service, its spec and one golden fixture per route."""
+    import re
+    import sys
+    import textwrap
+
+    src = (Path(__file__).parent / "test_http_language.py").read_text()
+    service = re.search(r'SERVICE = textwrap.dedent\(\n    """\\\n(.*?)    """\n\)', src, re.DOTALL)
+    spec = re.search(r'OPENAPI = textwrap.dedent\(\n    """\\\n(.*?)    """\n\)', src, re.DOTALL)
+    assert service and spec
+    root = tmp_path / "proj"
+    (root / "svc").mkdir(parents=True)
+    (root / "tests" / "golden").mkdir(parents=True)
+    (root / "svc" / "app.py").write_text(textwrap.dedent(service.group(1)))
+    (root / "svc" / "openapi.yaml").write_text(textwrap.dedent(spec.group(1)))
+    (root / "tests" / "golden" / "p.http.yaml").write_text(
+        "- name: price\n  request: {method: POST, path: /price, json: {subtotal: 100}}\n  expect: {status: 200}\n"
+        "- name: order\n  request: {path: /orders/7}\n  expect: {status: 404}\n"
+        "- name: health\n  request: {path: /health}\n  expect: {status: 200}\n"
+    )
+    (root / "testgate.yaml").write_text(
+        "language: http\npackage: svc\nimport_name: app\nprotected: []\n"
+        f"http:\n  start: ['{sys.executable}', app.py, '{{port}}']\n"
+        "  health: 'http://127.0.0.1:{port}/health'\n  startup_timeout_s: 15\n  openapi: openapi.yaml\n"
+        "gates:\n  hidden: {required: false}\n  tests: {repeats: 1}\n"
+        "  coverage: {min_changed: 0.0, max_drop: 1.0}\n  mutation: {min_score: 1.0}\n"
+    )
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    return root
+
+
+def test_run_http_differential_catches_undeclared_behaviour_change(tmp_path: Path) -> None:
+    """HTTP mode (#35): a response change on a route whose spec did not change is a survivor."""
+    root = _http_project(tmp_path)
+    app = root / "svc" / "app.py"
+    app.write_text(app.read_text().replace('"currency": "USD"', '"currency": "EUR"'))
+    out = tmp_path / "out.json"
+    code = main(["run", "--root", str(root), "--base", "main", "--json", str(out), "--quiet"])
+    report = json.loads(out.read_text())
+    mutation = next(g for g in report["gates"] if g["name"] == "mutation")
+    assert mutation["status"] == "fail", mutation
+    assert mutation["compared"] == 3 and mutation["identical"] == 2
+    assert mutation["survivors"] == [{"route": "POST /price", "case": "price", "file": "golden"}]
+    assert code == 1
+
+    # declare the change in the spec: the route is excluded and the rest match
+    spec = root / "svc" / "openapi.yaml"
+    spec.write_text(
+        spec.read_text().replace("post: {summary: price}", "post: {summary: price in EUR}")
+    )
+    code = main(["run", "--root", str(root), "--base", "main", "--json", str(out), "--quiet"])
+    report = json.loads(out.read_text())
+    mutation = next(g for g in report["gates"] if g["name"] == "mutation")
+    assert mutation["status"] == "pass", mutation
+    assert mutation["compared"] == 2 and mutation["changed_routes"] == 1
+    assert code == 0

@@ -27,8 +27,10 @@ TOP_KEYS = {
     "seed_env",
     "gates",
     "sandbox",
+    "http",
 }
-LANGUAGES = ("python", "js")
+LANGUAGES = ("python", "js", "http")
+HTTP_KEYS = {"start", "health", "startup_timeout_s", "openapi", "env"}
 TESTS_KEYS = {"golden", "auto", "hidden", "hidden_env"}
 SANDBOX_KEYS = {"network", "timeout_s", "python"}
 
@@ -67,6 +69,7 @@ _POSITIVE_INTS = (
     "mutation_timeout_s",
     "mutation_jobs",
     "timeout_s",
+    "http_startup_timeout_s",
 )
 
 
@@ -174,6 +177,47 @@ def load_config(root: Path, base_ref: str | None) -> ProjectConfig:
         cfg.timeout_s = sandbox["timeout_s"]
     if sandbox.get("python") is not None:
         cfg.python = _string("sandbox.python", sandbox["python"])
+
+    http = _mapping("http", data.get("http"))
+    _check_keys("http", http, HTTP_KEYS)
+    if "start" in http:
+        start = http["start"]
+        if isinstance(start, dict):
+            _check_keys("http.start", start, {"compose", "service", "port"})
+            if not all(k in start for k in ("compose", "service", "port")):
+                raise GateError(
+                    f"{CONFIG_FILE}: http.start compose form needs compose, service, port"
+                )
+            cfg.http_compose = _string("http.start.compose", start["compose"])
+            cfg.http_compose_service = _string("http.start.service", start["service"])
+            if (
+                not isinstance(start["port"], int)
+                or isinstance(start["port"], bool)
+                or start["port"] < 1
+            ):
+                raise GateError(f"{CONFIG_FILE}: http.start.port must be a positive integer")
+            cfg.http_compose_port = start["port"]
+        elif not isinstance(start, list) or not all(isinstance(a, str) for a in start) or not start:
+            raise GateError(
+                f"{CONFIG_FILE}: http.start must be a non-empty list of strings or a compose mapping"
+            )
+        else:
+            cfg.http_start = list(start)
+    if "health" in http:
+        cfg.http_health = _string("http.health", http["health"])
+    if "startup_timeout_s" in http:
+        cfg.http_startup_timeout_s = http["startup_timeout_s"]
+    if http.get("openapi") is not None:
+        cfg.http_openapi = _string("http.openapi", http["openapi"])
+    if "env" in http:
+        env = http["env"]
+        if not isinstance(env, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in env.items()
+        ):
+            raise GateError(f"{CONFIG_FILE}: http.env must map strings to strings")
+        cfg.http_env = dict(env)
+    if language == "http" and (not (cfg.http_start or cfg.http_compose) or not cfg.http_health):
+        raise GateError(f"{CONFIG_FILE}: language http needs http.start and http.health")
 
     _validate(cfg)
     cfg.raw = {**data, "_source": source}

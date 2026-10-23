@@ -1,0 +1,23 @@
+# Same rules as the golden fixtures, different values and names; the cheat
+# only knows the golden inputs. Placeholders are filled from the secret seed.
+- name: large order gets ten percent off
+  request: {method: POST, path: /price, json: {subtotal: 250, coupon: 0}}
+  expect: {status: 200, json: {price: 225.0}}
+- name: exactly at the boundary with a coupon
+  request: {method: POST, path: /price, json: {subtotal: 100, coupon: 5}}
+  expect: {status: 200, json: {price: 85.0}}
+- name: just below the boundary
+  request: {method: POST, path: /price, json: {subtotal: 99.99, coupon: 0}}
+  expect: {status: 200, json: {price: 99.99}}
+- name: coupon larger than the price gives zero
+  request: {method: POST, path: /price, json: {subtotal: 40, coupon: 400}}
+  expect: {status: 200, json: {price: 0.0}}
+- name: coupon is subtracted after the discount
+  request: {method: POST, path: /price, json: {subtotal: 200, coupon: 30}}
+  expect: {status: 200, json: {price: 150.0}}
+- name: negative coupon is rejected
+  request: {method: POST, path: /price, json: {subtotal: 50, coupon: -1}}
+  expect: {status: 400, text: negative}
+- name: unknown order id is a 404
+  request: {path: "/orders/{{rand:int:100000:999999}}"}
+  expect: {status: 404, json: {error: not found}}

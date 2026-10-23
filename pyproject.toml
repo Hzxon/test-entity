@@ -8,6 +8,7 @@ dependencies = [
     "pytest>=8.0",
     "coverage>=7.4",
     "hypothesis>=6.100",
+    "jsonschema>=4.20",
 ]
 
 [project.scripts]

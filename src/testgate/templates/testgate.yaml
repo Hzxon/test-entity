@@ -2,7 +2,7 @@
 # origin/main), so a change cannot loosen the gates it is judged by.
 version: 1  # schema version; only 1 exists
 
-# Language adapter: python (default) or js.
+# Language adapter: python (default), js, or http (needs an `http:` section; see docs/adr/0002).
 # language: python
 
 # Source directory copied into the sandbox, relative to the repo root.

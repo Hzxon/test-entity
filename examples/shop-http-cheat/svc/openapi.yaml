@@ -1,0 +1,13 @@
+openapi: 3.0.0
+info: {title: shop, version: "1"}
+paths:
+  /health:
+    get: {summary: liveness}
+  /price:
+    post:
+      summary: final price for an order
+      responses:
+        "200": {description: price and currency}
+        "400": {description: negative input}
+  /orders/{id}:
+    get: {summary: one order (not implemented, always 404)}

@@ -1,0 +1,23 @@
+# The same shop as examples/shop-http, started through docker compose.
+language: http
+package: svc
+import_name: app
+tests:
+  golden: tests/golden
+  hidden: ../shop-http-hidden
+http:
+  start: {compose: compose.yaml, service: shop, port: 8000}
+  health: "http://127.0.0.1:{port}/health"
+  startup_timeout_s: 120  # includes the image build on a cold cache
+  openapi: openapi.yaml
+gates:
+  protected: false
+  tests:
+    repeats: 1
+  coverage:
+    min_changed: 0.0
+  mutation:
+    min_score: 1.0
+sandbox:
+  network: false
+  timeout_s: 300

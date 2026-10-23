@@ -408,7 +408,10 @@ def gate_coverage(ctx: RunContext) -> GateResult:
     cfg = ctx.config
     run, data = _measure_coverage(ctx)
     total = data.total()
-    changed_ratio, uncovered = _changed_ratio(ctx.changed, data) if ctx.changed else (None, [])
+    # an adapter may redefine the changed units (http: routes whose spec changed)
+    overlay = getattr(ctx.language, "changed_units", None)
+    changed = (overlay(ctx) if overlay else None) or ctx.changed
+    changed_ratio, uncovered = _changed_ratio(changed, data) if changed else (None, [])
     public: dict[str, Any] = {
         "total": round(total, 4),
         "changed": None if changed_ratio is None else round(changed_ratio, 4),
@@ -507,6 +510,11 @@ def _auto_usefulness(
 
 def gate_mutation(ctx: RunContext) -> GateResult:
     cfg = ctx.config
+    # an adapter may replace mutation with its own judge (http: differential vs the base ref)
+    alt = getattr(ctx.language, "mutation_gate", None)
+    if alt is not None:
+        result: GateResult = alt(ctx)
+        return result
     data: CoverageData | None = ctx.shared.get("coverage")
     if data is None:
         _, data = _measure_coverage(ctx)

@@ -14,4 +14,8 @@ def get_language(name: str) -> Language:
         from .js import JsLanguage  # imported lazily: js.py is optional at import time
 
         return JsLanguage()
+    if name == "http":
+        from .http import HttpLanguage
+
+        return HttpLanguage()
     raise GateError(f"unknown language: {name!r}")

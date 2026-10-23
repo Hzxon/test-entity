@@ -1,0 +1,43 @@
+# Proves the action on every PR: the honest example must PASS, the cheat
+# example must FAIL. The hidden tests live in-repo here only because this is
+# the self-test; real projects keep them outside the repository.
+name: testgate-self
+
+on:
+  pull_request:
+
+jobs:
+  honest-passes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: gate
+        uses: ./
+        with:
+          root: examples/discount
+          base: origin/${{ github.base_ref }}
+          hidden-dir: ${{ github.workspace }}/examples/discount-hidden
+        env:
+          TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
+      - name: Verdict must be pass
+        run: test "${{ steps.gate.outputs.verdict }}" = "pass"
+
+  cheat-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: gate
+        uses: ./
+        continue-on-error: true
+        with:
+          root: examples/discount-cheat
+          base: origin/${{ github.base_ref }}
+          hidden-dir: ${{ github.workspace }}/examples/discount-hidden
+        env:
+          TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
+      - name: Verdict must be fail
+        run: test "${{ steps.gate.outputs.verdict }}" = "fail"

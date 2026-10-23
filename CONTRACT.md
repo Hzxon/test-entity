@@ -376,7 +376,8 @@ class Language(Protocol):                       # in core.py; no sibling imports
         # "FAILED <file>::<test>" / "ERROR <file>" lines both adapters put in TestRun.output
 ```
 
-- `ProjectConfig.language: str = "python"`; `config.py` validates it is "python" or "js". `ProjectConfig.python`
+- `ProjectConfig.language: str = "python"`; `config.py` validates it is "python", "js" or "http".
+- **http adapter** (`languages/http.py`, ADR 0002): `http:` config section (`start`, `health`, `startup_timeout_s`, `openapi`, `env`) on `ProjectConfig.http_*`. `package_dest` keeps the package path (`"app"` for `.`); `prepare_sandbox` adds `http.env` and, when the network is off, proxy variables pointing at a dead port; `build` starts the service with `{port}` substituted, polls `health` until 2xx (bounded by `startup_timeout_s`), stops the process group, and returns a CompletedProcess whose stdout is the service log; `run_tests` starts the service once, loads `*.http.yaml` fixtures from the test dirs (or `files`), fills `{{rand:int:a:b}}` / `{{rand:hex:n}}` from `seed` per case, replays them, and reports `PASSED|FAILED <file>::<name>` lines plus `ERROR <file> - ...` for fixtures that do not parse and `ERROR service - ...` when the service never got healthy; zero cases is a failure. `run_coverage` returns an empty CoverageData and `generate_mutants` returns [] until #34 and #35. `auto_file_ok` accepts `*.http.yaml` only. The pure parts (`load_cases`, `fill_placeholders`, `check`, `run_cases(cases, send)`) take an injectable `send` so they are testable without a socket. `ProjectConfig.python`
   stays Python-only. `RunContext.language: Any` (the adapter; typed Any in core to avoid a cycle).
 - `src/testgate/languages/__init__.py` exposes `get_language(name) -> Language`; `python.py` and `js.py` implement it.
 - `sandbox.build_sandbox(cfg, python, tests, overrides, dest=...)`: copies `cfg.package` to `<root>/<dest>` where

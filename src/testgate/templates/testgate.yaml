@@ -3,7 +3,7 @@
 version: 1  # schema version; only 1 exists
 
 # Language adapter: python (default) or js.
-# language: python
+# language: python  # python | js | http (http needs an `http:` section; see ADR 0002)
 
 # Source directory copied into the sandbox, relative to the repo root.
 package: __PACKAGE__

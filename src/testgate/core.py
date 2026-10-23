@@ -42,7 +42,12 @@ class ProjectConfig:
     root: Path  # absolute project root (the directory holding testgate.yaml)
     package: str  # source root to copy into the sandbox, e.g. "src/discount" or "discount"
     import_name: str  # top-level module the build gate imports, e.g. "discount"; js: entry file
-    language: str = "python"  # "python" | "js"; picks the adapter in languages/
+    language: str = "python"  # "python" | "js" | "http"; picks the adapter in languages/
+    http_start: list[str] = field(default_factory=list)  # service command; "{port}" is substituted
+    http_health: str = ""  # URL polled until 2xx; "{port}" is substituted
+    http_startup_timeout_s: int = 60
+    http_openapi: str | None = None  # OpenAPI document, repo-relative; enables route coverage
+    http_env: dict[str, str] = field(default_factory=dict)  # extra environment for the service
     golden: str = "tests/golden"  # protected, visible tests
     auto: str = "tests/auto"  # agent-writable, visible tests
     hidden: str | None = None  # local path to hidden tests (may be outside root); overrides env

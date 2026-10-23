@@ -71,7 +71,8 @@ Not verified:
   but nobody checked the built artifact.
 
 Known limits (documented in README.md):
-- Python and JavaScript/TypeScript (vitest). No other runtimes.
+- Python, JavaScript/TypeScript (vitest), and HTTP black-box mode (any
+  runtime; route coverage and the differential gate are still to come).
 - Equivalent mutants are reduced by rules (clamps, message-only constants,
   dead assignments); there is no general equivalence detection.
 - Sandbox is subprocess-based with a socket block, not a container.
@@ -109,7 +110,12 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 5 | ~~[Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5)~~ done | v0.1 |
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | ~~[JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7)~~ done | v1 |
-| 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8): design in `docs/adr/0002-http-black-box-mode.md`, awaiting human review | v1 |
+| 8 | ~~[HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8)~~ design accepted (ADR 0002); split into #33-#37 | v1 |
+| 11 | ~~[HTTP mode 1/5: skeleton, launcher, fixture runner](https://github.com/Hzxon/test-entity/issues/33)~~ in review | v1 |
+| 12 | [HTTP mode 2/5: route coverage](https://github.com/Hzxon/test-entity/issues/34) | v1 |
+| 13 | [HTTP mode 3/5: differential gate](https://github.com/Hzxon/test-entity/issues/35) | v1 |
+| 14 | [HTTP mode 4/5: example pair and e2e](https://github.com/Hzxon/test-entity/issues/36) | v1 |
+| 15 | [HTTP mode 5/5: docker compose start](https://github.com/Hzxon/test-entity/issues/37) | v1 |
 | 9 | [Baseline coverage: only hidden tests that pass at base](https://github.com/Hzxon/test-entity/issues/27) | v1 |
 | 10 | ~~[JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28)~~ done | v1 |
 

@@ -8,6 +8,7 @@ imports from sibling modules.
 from __future__ import annotations
 
 import enum
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,7 @@ class ProjectConfig:
     mutation_auto_useless_blocks: bool = (
         False  # FAIL (not WARN) when an auto test file kills nothing new
     )
+    mutation_jobs: int = max(1, (os.cpu_count() or 2) // 2)  # mutant runs in flight at once
     network: bool = False  # sandbox blocks sockets when False
     timeout_s: int = 600  # per pytest invocation
     python: str | None = None  # interpreter for the sandbox; None = sys.executable

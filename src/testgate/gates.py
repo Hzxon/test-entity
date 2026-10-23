@@ -14,6 +14,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -426,23 +427,33 @@ def _auto_usefulness(
         return [], [], {}
     files = sorted(p.name for p in auto["auto"].glob("test_*.py"))
     killed_by: dict[str, list[str]] = {}
+    pairs = [(name, m) for name in files for m in survivors]
+
+    def check(pair: tuple[str, Mutant]) -> tuple[str, Mutant, TestRun]:
+        name, m = pair
+        sb = sandbox.build_sandbox(cfg, ctx.python, auto, overrides={m.path: m.source})
+        try:
+            run = runner.run_pytest(
+                sb,
+                [],
+                cfg.mutation_timeout_s,
+                ctx.seed,
+                extra_args=[f"tests/auto/{name}", "-x"],
+            )
+        finally:
+            sandbox.destroy(sb)
+        return name, m, run
+
+    # Each pair gets its own sandbox, so the pairs are independent; results are
+    # consumed in list order, so the report does not depend on timing.
+    with ThreadPoolExecutor(max_workers=cfg.mutation_jobs) as pool:
+        results = list(pool.map(check, pairs))
     for name in files:
         killed_by[name] = []
-        for m in survivors:
-            sb = sandbox.build_sandbox(cfg, ctx.python, auto, overrides={m.path: m.source})
-            try:
-                run = runner.run_pytest(
-                    sb,
-                    [],
-                    cfg.mutation_timeout_s,
-                    ctx.seed,
-                    extra_args=[f"tests/auto/{name}", "-x"],
-                )
-            finally:
-                sandbox.destroy(sb)
-            ctx.log(f"auto {name} vs {m.id}: exit={run.exit_code}\n{run.output}")
-            if not run.ok:
-                killed_by[name].append(m.id)
+    for name, m, run in results:
+        ctx.log(f"auto {name} vs {m.id}: exit={run.exit_code}\n{run.output}")
+        if not run.ok:
+            killed_by[name].append(m.id)
     useless = [name for name in files if not killed_by[name]]
     return files, useless, killed_by
 
@@ -482,15 +493,21 @@ def gate_mutation(ctx: RunContext) -> GateResult:
     ctx.log(f"mutation baseline exit={baseline.exit_code}\n{baseline.output}")
     if not baseline.ok:
         return _skip("mutation", "skipped: golden/hidden tests fail on unmutated code")
-    for m in mutants:
+
+    def judge(m: Mutant) -> TestRun:
         sb = sandbox.build_sandbox(cfg, ctx.python, dirs, overrides={m.path: m.source})
         try:
-            m.run = runner.run_pytest(
-                sb, names, cfg.mutation_timeout_s, ctx.seed, extra_args=["-x"]
-            )
+            return runner.run_pytest(sb, names, cfg.mutation_timeout_s, ctx.seed, extra_args=["-x"])
         finally:
             sandbox.destroy(sb)
-        m.killed = not m.run.ok  # a timeout is not ok, so it counts as killed
+
+    # One sandbox per mutant, so runs are independent. `mutants` is sorted by id
+    # and map() keeps that order, so the report is the same at any job count.
+    mutants.sort(key=lambda m: m.id)
+    with ThreadPoolExecutor(max_workers=cfg.mutation_jobs) as pool:
+        for m, run in zip(mutants, pool.map(judge, mutants), strict=True):
+            m.run = run
+            m.killed = not run.ok  # a timeout is not ok, so it counts as killed
 
     killed = sum(1 for m in mutants if m.killed)
     score = killed / len(mutants)

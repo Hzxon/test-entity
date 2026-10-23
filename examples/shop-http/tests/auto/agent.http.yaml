@@ -1,0 +1,4 @@
+# The agent's own fixture: only checks that the endpoint answers at all.
+- name: price endpoint responds
+  request: {method: POST, path: /price, json: {subtotal: 100, coupon: 0}}
+  expect: {status: 200}

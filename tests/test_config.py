@@ -182,3 +182,15 @@ def test_mutation_auto_useless_blocks_key(tmp_path: Path) -> None:
     )
     with pytest.raises(GateError, match="auto_useless_blocks"):
         load_config(tmp_path, None)
+
+
+def test_mutation_jobs_key(tmp_path: Path) -> None:
+    (tmp_path / "testgate.yaml").write_text(
+        "package: src/p\nimport_name: p\ngates:\n  mutation:\n    jobs: 3\n"
+    )
+    assert load_config(tmp_path, None).mutation_jobs == 3
+    (tmp_path / "testgate.yaml").write_text(
+        "package: src/p\nimport_name: p\ngates:\n  mutation:\n    jobs: 0\n"
+    )
+    with pytest.raises(GateError, match="jobs"):
+        load_config(tmp_path, None)

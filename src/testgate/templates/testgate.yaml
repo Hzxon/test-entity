@@ -49,6 +49,7 @@ gates:
     max_shown: 7  # surviving mutants listed per file
     timeout_s: 60  # per mutant run; a timeout counts as killed
     auto_useless_blocks: false  # true: FAIL when an auto test file kills no mutant golden+hidden missed
+    # jobs: 4  # mutant runs in flight at once; default is half the CPUs
 
 sandbox:
   network: false  # block sockets inside test runs

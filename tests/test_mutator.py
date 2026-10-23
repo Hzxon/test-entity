@@ -179,3 +179,49 @@ def test_before_after_truncated_to_80():
 
 def test_syntax_error_returns_empty():
     assert generate_mutants("m.py", "def f(:\n", {1}, "s", 5) == []
+
+
+def test_ror_skipped_on_clamp_assign_but_other_operators_remain():
+    src = "def f(x):\n    if x < 0:\n        x = 0\n    return x\n"
+    ms = gen(src, {2})
+    # ROR (< vs <=) is equivalent here; the next operator on the line is UOI on the test
+    assert [m.operator for m in ms] == ["UOI"]
+    assert ms[0].after == "not x < 0"
+    # a clamp through a numeric constructor counts too
+    src2 = "def f(x):\n    if x < 0:\n        x = Decimal(0)\n    return x\n"
+    assert [m.operator for m in gen(src2, {2})] == ["UOI"]
+
+
+def test_ror_skipped_on_clamp_return_pattern():
+    src = "def f(x):\n    if x > 100:\n        return 100\n    return x\n"
+    assert [m.operator for m in gen(src, {2})] == ["UOI"]
+    # not a clamp: the else branch returns something else
+    src2 = "def f(x):\n    if x > 100:\n        return 100\n    return x + 1\n"
+    assert gen(src2, {2})[0].operator == "ROR"
+
+
+def test_ror_kept_when_assigned_value_differs_from_bound():
+    src = "def f(x):\n    if x < 0:\n        x = -1\n    return x\n"
+    assert gen(src, {2})[0].operator == "ROR"
+
+
+def test_crp_skipped_inside_format_call_and_percent():
+    src = "def f(n):\n    a = '{} items'.format(7)\n    b = '%d items' % 7\n    return a + b\n"
+    # CRP outranks SBR, so SBR winning means the constants were skipped
+    assert [m.operator for m in gen(src, {2, 3})] == ["SBR", "SBR"]
+    # a plain 7 outside formatting is still mutated
+    assert gen("def f():\n    return 7\n", {2})[0].after == "8"
+
+
+def test_sbr_skipped_on_assignment_never_read():
+    src = "def f(x):\n    unused = x * 2\n    return x\n"
+    ms = gen(src, {2})
+    # SBR would be equivalent; AOR on the multiplication is still offered
+    assert [m.operator for m in ms] == ["AOR"]
+    src2 = "def f(x):\n    y = x\n    return y\n"
+    assert gen("def f(x):\n    y = 3\n    return y\n", {2})[0].operator == "CRP"
+    assert gen(src2, {2})[0].operator == "SBR"
+
+
+def test_sbr_kept_for_module_level_assignment():
+    assert gen("CONFIG = {}\n", {1})[0].operator == "SBR"

@@ -69,8 +69,8 @@ Not verified:
 
 Known limits (documented in README.md):
 - Python only.
-- Equivalent mutants are reported as survivors (e.g. `< 0` vs `<= 0` before a
-  clamp). No equivalence detection.
+- Equivalent mutants are reduced by rules (clamps, message-only constants,
+  dead assignments); there is no general equivalence detection.
 - Sandbox is subprocess-based with a socket block, not a container.
 - Mutation runs one sandbox per mutant, serially; slow on large diffs.
 
@@ -102,7 +102,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 1 | ~~[Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1)~~ done | v0 |
 | 2 | ~~[ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2)~~ done | v0.1 |
 | 3 | ~~[Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3)~~ done | v0.1 |
-| 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |
+| 4 | ~~[Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4)~~ done | v0.1 |
 | 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |

@@ -68,9 +68,10 @@ def test_honest_example_passes(tmp_path):
     report = json.loads(out.read_text())
     assert report["verdict"] == "pass"
     mutation = next(g for g in report["gates"] if g["name"] == "mutation")
-    # the agent's test only checks the return type, so it kills nothing golden + hidden missed
-    assert mutation["status"] == "warn"
-    assert mutation["auto_useless"] == ["test_agent.py"]
+    # every mutant is killed, so there is nothing left to credit the agent's test with
+    assert mutation["status"] == "pass"
+    assert mutation["survivors"] == []
+    assert mutation["auto_checked"] == 0
 
 
 @needs_cli

@@ -6,8 +6,11 @@ text and the seed go to GateResult.private.
 
 from __future__ import annotations
 
+import dataclasses
 import random
 import re
+import shutil
+import tempfile
 import time
 import traceback
 from collections.abc import Callable
@@ -295,6 +298,46 @@ def _measure_coverage(ctx: RunContext) -> tuple[TestRun, CoverageData]:
     return run, data
 
 
+def _baseline_coverage(ctx: RunContext) -> tuple[CoverageData | None, str]:
+    """Coverage of the package as it is at the base ref, with the same test dirs.
+
+    Golden and auto tests come from the base ref; hidden tests are the current
+    ones, since they live outside the repository. Returns (data, reason) where
+    data is None when no comparison is possible.
+    """
+    cfg = ctx.config
+    if ctx.base_ref is None:
+        return None, "no base ref"
+    tmp = Path(tempfile.mkdtemp(prefix="testgate-base-"))
+    try:
+        present = gitinfo.archive(cfg.root, ctx.base_ref, [cfg.package, cfg.golden, cfg.auto], tmp)
+        if cfg.package not in present:
+            return None, "package absent at base ref"
+        base_cfg = dataclasses.replace(cfg, root=tmp)
+        dirs: dict[str, Path] = {}
+        for name, rel in (("golden", cfg.golden), ("auto", cfg.auto)):
+            if rel in present and (tmp / rel).is_dir():
+                dirs[name] = tmp / rel
+        if ctx.hidden_dir is not None:
+            dirs["hidden"] = ctx.hidden_dir
+        if not dirs:
+            return None, "no tests at base ref"
+        sb = sandbox.build_sandbox(base_cfg, ctx.python, dirs)
+        try:
+            run, data = runner.run_coverage(
+                sb, list(dirs), cfg.timeout_s, ctx.seed, tmp, cfg.package
+            )
+        finally:
+            sandbox.destroy(sb)
+        ctx.log(f"baseline coverage exit={run.exit_code}\n{run.output}")
+        if not run.ok:
+            return None, "tests fail at base ref"
+        ctx.shared["baseline_coverage"] = data
+        return data, "ok"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _changed_ratio(
     changed: list[ChangedFile], data: CoverageData
 ) -> tuple[float | None, list[str]]:
@@ -326,6 +369,19 @@ def gate_coverage(ctx: RunContext) -> GateResult:
     problems: list[str] = []
     if not run.ok:
         problems.append("tests failed under coverage")
+    baseline, reason = _baseline_coverage(ctx)
+    if baseline is None:
+        public["baseline_total"] = None
+        public["drop"] = None
+        public["baseline_skipped"] = reason
+    else:
+        drop = baseline.total() - total
+        public["baseline_total"] = round(baseline.total(), 4)
+        public["drop"] = round(drop, 4)
+        if drop > cfg.coverage_max_drop:
+            problems.append(
+                f"dropped {drop:.1%} from {baseline.total():.0%} (max {cfg.coverage_max_drop:.0%})"
+            )
     if total < cfg.coverage_min_total:
         problems.append(f"total {total:.0%} < {cfg.coverage_min_total:.0%}")
     if changed_ratio is not None and changed_ratio < cfg.coverage_min_changed:

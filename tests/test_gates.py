@@ -49,6 +49,8 @@ class Fakes:
         self.decide: Any = None
         self.pytest_calls: list[tuple[list[str], list[str] | None]] = []
         self.coverage: tuple[_TestRun, CoverageData] = (tr(), CoverageData())
+        self.coverage_runs: list[tuple[_TestRun, CoverageData]] = []
+        self.coverage_calls: list[tuple[Any, ...]] = []
         self.proc_codes: list[int] = []
         self.destroyed = 0
 
@@ -91,6 +93,9 @@ class Fakes:
         return self.runs.pop(0) if len(self.runs) > 1 else self.runs[0]
 
     def run_coverage(self, *args: Any) -> tuple[_TestRun, CoverageData]:
+        self.coverage_calls.append(args)
+        if self.coverage_runs:
+            return self.coverage_runs.pop(0)
         return self.coverage
 
 
@@ -623,3 +628,62 @@ def test_mutation_no_survivors_skips_auto_check(
     assert result.status is Status.PASS
     assert result.public["auto_checked"] == 0
     assert result.public["auto_useless"] == []
+
+
+def install_archive(monkeypatch: pytest.MonkeyPatch, present: list[str]) -> list[Any]:
+    calls: list[Any] = []
+
+    def archive(root: Path, ref: str, paths: list[str], dest: Path) -> list[str]:
+        calls.append((ref, list(paths)))
+        for rel in present:
+            (dest / rel).mkdir(parents=True, exist_ok=True)
+            (dest / rel / "__init__.py").write_text("")
+        return [p for p in paths if p in present]
+
+    monkeypatch.setattr(gates, "gitinfo", SimpleNamespace(archive=archive))
+    return calls
+
+
+def test_coverage_baseline_drop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    calls = install_archive(monkeypatch, ["src/pkg", "tests/golden"])
+    ctx = make_ctx(tmp_path, coverage_min_changed=0.0)
+    current = cov({"src/pkg/a.py": {1, 2, 3, 4}}, {"src/pkg/a.py": {1, 2}})
+    baseline = cov({"src/pkg/a.py": {1, 2, 3, 4}}, {"src/pkg/a.py": {1, 2, 3, 4}})
+    fakes.coverage_runs = [(tr(), current), (tr(), baseline)]
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.FAIL
+    assert "dropped 50.0% from 100%" in result.summary
+    assert result.public["baseline_total"] == 1.0
+    assert result.public["drop"] == 0.5
+    assert ctx.shared["baseline_coverage"] is baseline
+    assert calls == [("main", ["src/pkg", "tests/golden", "tests/auto"])]
+    # baseline sandbox: golden from the archive, hidden from the current run, no auto (absent at base)
+    base_root = fakes.coverage_calls[1][4]
+    assert list(fakes.builds[1].test_dirs) == ["golden", "hidden"]
+    assert fakes.builds[1].test_dirs["golden"] == base_root / "tests/golden"
+    assert fakes.builds[1].test_dirs["hidden"] == ctx.hidden_dir
+
+    ctx.config.coverage_max_drop = 0.5
+    fakes.coverage_runs = [(tr(), current), (tr(), baseline)]
+    assert gates.gate_coverage(ctx).status is Status.PASS
+
+
+def test_coverage_baseline_skipped_reasons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    install_archive(monkeypatch, ["tests/golden"])  # package absent at base
+    ctx = make_ctx(tmp_path, coverage_min_changed=0.0)
+    fakes.coverage = (tr(), cov({"src/pkg/a.py": {1}}, {"src/pkg/a.py": set()}))
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.PASS
+    assert result.public["baseline_skipped"] == "package absent at base ref"
+    assert result.public["drop"] is None
+
+    install_archive(monkeypatch, ["src/pkg", "tests/golden"])
+    fakes.coverage_runs = [fakes.coverage, (tr(1, 0, 1), CoverageData())]
+    assert gates.gate_coverage(ctx).public["baseline_skipped"] == "tests fail at base ref"
+
+    ctx.base_ref = None
+    assert gates.gate_coverage(ctx).public["baseline_skipped"] == "no base ref"

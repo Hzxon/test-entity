@@ -37,7 +37,11 @@ GATE_OPTIONS: dict[str, dict[str, str]] = {
     "build": {},
     "tests": {"repeats": "repeats"},
     "hidden": {"required": "hidden_required"},
-    "coverage": {"min_total": "coverage_min_total", "min_changed": "coverage_min_changed"},
+    "coverage": {
+        "min_total": "coverage_min_total",
+        "min_changed": "coverage_min_changed",
+        "max_drop": "coverage_max_drop",
+    },
     "mutation": {
         "min_score": "mutation_min_score",
         "max_mutants": "mutation_max_mutants",
@@ -47,7 +51,12 @@ GATE_OPTIONS: dict[str, dict[str, str]] = {
     },
 }
 
-_FRACTIONS = ("coverage_min_total", "coverage_min_changed", "mutation_min_score")
+_FRACTIONS = (
+    "coverage_min_total",
+    "coverage_min_changed",
+    "coverage_max_drop",
+    "mutation_min_score",
+)
 _POSITIVE_INTS = (
     "repeats",
     "mutation_max_mutants",

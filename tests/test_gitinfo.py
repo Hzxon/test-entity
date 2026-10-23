@@ -177,3 +177,17 @@ def test_root_may_be_a_subdirectory_of_the_repo(repo: Path) -> None:
     assert gitinfo.tree_hash(sub, "main", "src") != gitinfo.tree_hash(sub, None, "src")
     (sub / "src" / "m.py").write_text("a = 1\nb = 2\n")
     assert gitinfo.tree_hash(sub, "main", "src") == gitinfo.tree_hash(sub, None, "src")
+
+
+def test_archive_extracts_paths_at_ref_and_skips_missing(repo: Path, tmp_path: Path) -> None:
+    sub = repo / "apps" / "shop"
+    (sub / "src" / "m").mkdir(parents=True)
+    (sub / "src" / "m" / "__init__.py").write_text("v = 1\n")
+    commit_all(repo, "add subproject")
+    (sub / "src" / "m" / "__init__.py").write_text("v = 2\n")  # worktree differs from main
+    dest = tmp_path / "base"
+    present = gitinfo.archive(sub, "main", ["src/m", "tests/golden"], dest)
+    assert present == ["src/m"]
+    assert (dest / "src" / "m" / "__init__.py").read_text() == "v = 1\n"
+    assert not (dest / "tests").exists()
+    assert gitinfo.archive(sub, "main", ["nope"], tmp_path / "empty") == []

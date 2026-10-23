@@ -41,6 +41,7 @@ gates:
     enabled: true
     min_total: 0.0  # minimum total line coverage, 0..1
     min_changed: 0.9  # minimum coverage of changed lines, 0..1
+    max_drop: 0.0  # allowed drop of total coverage vs the base ref, 0..1
   mutation:
     enabled: true
     min_score: 0.8  # killed / generated, 0..1

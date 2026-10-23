@@ -27,8 +27,12 @@ of truth that drifts from the code.
   every change arrives by squash-merged PR, and the checks `test (3.11)`,
   `test (3.12)`, `test (3.13)`, `honest-passes` and `cheat-fails` must pass.
   0 approving reviews are required. `BACKLOG.md` updates go through a PR too.
-- **testgate itself** joins the required checks once issue #6 lands; the
-  verdict is the review.
+- **testgate itself** is a required check; the verdict is the review.
+- **Hidden tests** live in `Hzxon/testgate-hidden`, protected by a ruleset:
+  PR required, one human approval, no direct pushes. Agents may propose hidden
+  tests; only a human merges them (#23). The gate reads that repo's `main`.
+- **Self-gate thresholds** ratchet by PR to `main`, judged by the rules on
+  `main` at that moment (#24).
 
 ## Rules for agents
 

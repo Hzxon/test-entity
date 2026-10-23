@@ -351,7 +351,9 @@ class Language(Protocol):                       # in core.py; no sibling imports
         # python: name matches test_*.py or __init__.py; js: *.test.js|mjs|ts (no vitest.config.*, no setup files)
     def build(self, sb: Sandbox, cfg: ProjectConfig, timeout_s: int) -> subprocess.CompletedProcess[str]
         # python: python -c "import <import_name>" then compileall -q src
-        # js: node --check on every .js/.mjs/.cjs under the package dir (ts files skipped), first failure returned
+        # js: node --check on every .js/.mjs/.cjs under the package dir (ts files skipped), first failure returned;
+        #     then, when <project>/tsconfig.json exists (copied into the sandbox by prepare_sandbox),
+        #     `node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`; GateError naming `typescript` if absent
     def run_tests(self, sb: Sandbox, names: list[str], timeout_s: int, seed: str,
                   files: list[str] | None = None, fail_fast: bool = False) -> TestRun
         # names: sandbox test dirs ("golden", "auto", "hidden"); files: restrict to these paths relative to sb.root

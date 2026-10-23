@@ -111,7 +111,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 7 | ~~[JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7)~~ done | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
 | 9 | [Baseline coverage: only hidden tests that pass at base](https://github.com/Hzxon/test-entity/issues/27) | v1 |
-| 10 | [JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28) | v1 |
+| 10 | ~~[JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28)~~ done | v1 |
 
 ## Decisions taken
 
@@ -129,7 +129,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 - #25 (2026-10-23): baseline comparison will use only hidden tests that pass
   at the base ref (issue #27).
 - #26 (2026-10-23): `tsc --noEmit` in the JS build gate when `tsconfig.json`
-  exists (issue #28).
+  exists (shipped in #28).
 
 ## Open questions for the user (`needs-human`)
 

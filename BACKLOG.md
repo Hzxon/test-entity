@@ -109,7 +109,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 5 | ~~[Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5)~~ done | v0.1 |
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | ~~[JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7)~~ done | v1 |
-| 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
+| 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8): design in `docs/adr/0002-http-black-box-mode.md`, awaiting human review | v1 |
 | 9 | [Baseline coverage: only hidden tests that pass at base](https://github.com/Hzxon/test-entity/issues/27) | v1 |
 | 10 | ~~[JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28)~~ done | v1 |
 

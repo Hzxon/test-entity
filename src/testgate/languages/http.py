@@ -27,7 +27,17 @@ from typing import Any
 import jsonschema
 import yaml
 
-from testgate.core import CoverageData, GateError, Mutant, ProjectConfig, Sandbox, TestRun
+from testgate import gitinfo
+from testgate.core import (
+    ChangedFile,
+    CoverageData,
+    GateError,
+    Mutant,
+    ProjectConfig,
+    RunContext,
+    Sandbox,
+    TestRun,
+)
 
 FIXTURE_GLOB = "*.http.yaml"
 _FAILED_LINE = re.compile(r"^(?:FAILED|ERROR) (\S+?)(?:::|\s|$)", re.MULTILINE)
@@ -209,6 +219,54 @@ def run_cases(cases: list[Case], send: Send, fail_fast: bool = False) -> list[Ca
     return out
 
 
+# --- routes (OpenAPI) ---------------------------------------------------------
+
+_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
+_TEMPLATE_PARAM = re.compile(r"\{[^/}]+\}")
+
+
+def load_routes(text: str) -> dict[str, Any]:
+    """``{"POST /price": <operation object>}`` from an OpenAPI document (YAML or JSON)."""
+    doc = yaml.safe_load(text) or {}
+    paths = doc.get("paths") if isinstance(doc, dict) else None
+    if not isinstance(paths, dict):
+        raise GateError("openapi document has no 'paths' mapping")
+    routes: dict[str, Any] = {}
+    for path, item in paths.items():
+        if not isinstance(item, dict):
+            continue
+        for method in _METHODS:
+            if method in item:
+                routes[f"{method.upper()} {path}"] = item[method]
+    return routes
+
+
+def match_route(routes: dict[str, Any], method: str, path: str) -> str | None:
+    """The route id a concrete request hits; literal segments win over templated ones."""
+    concrete = path.split("?", 1)[0]
+    best: tuple[int, str] | None = None
+    for route in routes:
+        rm, template = route.split(" ", 1)
+        if rm != method.upper():
+            continue
+        pattern = (
+            "^"
+            + _TEMPLATE_PARAM.sub(
+                "[^/]+", re.escape(template).replace(r"\{", "{").replace(r"\}", "}")
+            )
+            + "$"
+        )
+        if re.match(pattern, concrete):
+            literal = template.count("/") - len(_TEMPLATE_PARAM.findall(template))
+            if best is None or literal > best[0]:
+                best = (literal, route)
+    return best[1] if best else None
+
+
+def _route_key(openapi: str, route: str) -> str:
+    return f"{openapi}#{route}"
+
+
 # --- transport and service ----------------------------------------------------
 
 
@@ -296,6 +354,7 @@ class HttpLanguage:
     source_suffixes: tuple[str, ...] = (".py", ".js", ".mjs", ".ts", ".go", ".rb", ".rs", ".java")
     test_glob: str = FIXTURE_GLOB
     detection_tokens: tuple[str, ...] = ("TESTGATE_",)
+    _record: Callable[[Case], None] | None = None  # set by run_coverage to observe requests
 
     def package_dest(self, cfg: ProjectConfig) -> str:
         return "app" if cfg.package in (".", "") else cfg.package
@@ -366,7 +425,15 @@ class HttpLanguage:
                 lines.append(f"ERROR service - {why}")
             else:
                 per_request = max(1.0, min(30.0, timeout_s / max(1, len(cases))))
-                results = run_cases(cases, _send_http(svc.base, per_request), fail_fast)
+                send = _send_http(svc.base, per_request)
+                record = getattr(self, "_record", None)
+                if record is not None:
+
+                    def send(case: Case, _inner: Send = send, _rec: Any = record) -> Response:
+                        _rec(case)
+                        return _inner(case)
+
+                results = run_cases(cases, send, fail_fast)
         finally:
             svc.stop()
         for r in results:
@@ -384,8 +451,56 @@ class HttpLanguage:
     def run_coverage(
         self, sb: Sandbox, names: list[str], timeout_s: int, seed: str, repo_package: str
     ) -> tuple[TestRun, CoverageData]:
-        # route coverage arrives with issue #34; until then the run is the only output
-        return self.run_tests(sb, names, timeout_s, seed), CoverageData()
+        """Route coverage: every route in the OpenAPI document is a statement, hit ones are covered.
+
+        Keys are ``<openapi path>#<METHOD> <template>`` with a single line 1, so the
+        coverage gate's math and report work unchanged.
+        """
+        cfg = getattr(self, "_cfg", None)
+        if cfg is None:
+            raise GateError("http adapter: build must run before coverage")
+        if not cfg.http_openapi:
+            return self.run_tests(sb, names, timeout_s, seed), CoverageData()
+        doc = sb.src_root / cfg.http_openapi
+        if not doc.is_file():
+            raise GateError(f"http.openapi not found in the package: {cfg.http_openapi}")
+        routes = load_routes(doc.read_text(encoding="utf-8"))
+        hits: set[str] = set()
+        self._record = lambda case: hits.add(match_route(routes, case.method, case.path) or "")
+        try:
+            run = self.run_tests(sb, names, timeout_s, seed)
+        finally:
+            self._record = None
+        data = CoverageData()
+        for route in routes:
+            key = _route_key(cfg.http_openapi, route)
+            data.statements[key] = {1}
+            data.covered[key] = {1} if route in hits else set()
+        return run, data
+
+    def changed_units(self, ctx: RunContext) -> list[ChangedFile] | None:
+        """Routes whose OpenAPI definition differs from the base ref, as ChangedFile entries."""
+        cfg = ctx.config
+        if ctx.base_ref is None or not cfg.http_openapi:
+            return None
+        rel = (
+            f"{cfg.package}/{cfg.http_openapi}"
+            if cfg.package not in (".", "")
+            else cfg.http_openapi
+        )
+        now_file = cfg.root / rel
+        if not now_file.is_file():
+            return None
+        now = load_routes(now_file.read_text(encoding="utf-8"))
+        base_text = gitinfo.show_file(cfg.root, ctx.base_ref, rel)
+        base = load_routes(base_text) if base_text else {}
+        changed = [
+            ChangedFile(_route_key(cfg.http_openapi, r), {1})
+            for r, op in now.items()
+            if r not in base
+            or json.dumps(base[r], sort_keys=True) != json.dumps(op, sort_keys=True)
+        ]
+        return changed
 
     def generate_mutants(
         self, path: str, source: str, lines: set[int], seed: str, max_mutants: int

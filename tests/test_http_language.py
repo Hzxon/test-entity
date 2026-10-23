@@ -283,3 +283,93 @@ def test_run_tests_before_build_is_an_error(project: ProjectConfig):
             fresh.run_tests(sb, ["golden"], 10, "s")
     finally:
         destroy(sb)
+
+
+# --- route coverage (#34) -----------------------------------------------------
+
+from testgate.languages.http import load_routes, match_route
+
+OPENAPI = textwrap.dedent(
+    """\
+    openapi: 3.0.0
+    info: {title: shop, version: "1"}
+    paths:
+      /health:
+        get: {summary: health}
+      /price:
+        post: {summary: price}
+      /orders/{id}:
+        get: {summary: one order}
+        delete: {summary: cancel}
+      /orders/latest:
+        get: {summary: latest}
+    """
+)
+
+
+def test_load_routes_and_match_prefers_literal_segments():
+    routes = load_routes(OPENAPI)
+    assert sorted(routes) == [
+        "DELETE /orders/{id}",
+        "GET /health",
+        "GET /orders/latest",
+        "GET /orders/{id}",
+        "POST /price",
+    ]
+    assert match_route(routes, "GET", "/orders/42?x=1") == "GET /orders/{id}"
+    assert match_route(routes, "GET", "/orders/latest") == "GET /orders/latest"
+    assert match_route(routes, "get", "/health") == "GET /health"
+    assert match_route(routes, "PUT", "/price") is None
+    assert match_route(routes, "GET", "/orders/1/items") is None
+    with pytest.raises(GateError, match="paths"):
+        load_routes("openapi: 3.0.0\n")
+
+
+def test_run_coverage_counts_routes_hit(project: ProjectConfig):
+    (project.root / "svc" / "openapi.yaml").write_text(OPENAPI)
+    project.http_openapi = "openapi.yaml"
+    sb = sandbox_for(project)
+    try:
+        LANG.build(sb, project, 30)
+        run, data = LANG.run_coverage(sb, ["golden"], 60, "seed", "svc")
+        assert run.ok
+        hit = {k for k, v in data.covered.items() if v}
+        # golden fixtures: POST /price twice, GET /orders/<n> once
+        assert hit == {"openapi.yaml#POST /price", "openapi.yaml#GET /orders/{id}"}
+        assert len(data.statements) == 5 and data.total() == 0.4
+    finally:
+        destroy(sb)
+
+
+def test_changed_units_are_routes_whose_spec_changed(project: ProjectConfig, tmp_path: Path):
+    import subprocess
+
+    from testgate.core import RunContext
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@x", "-c", "user.name=t", *args],
+            cwd=project.root,
+            check=True,
+            capture_output=True,
+        )
+
+    spec = project.root / "svc" / "openapi.yaml"
+    spec.write_text(OPENAPI)
+    project.http_openapi = "openapi.yaml"
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    # the PR: a new route and a changed definition of POST /price
+    spec.write_text(
+        OPENAPI.replace("post: {summary: price}", "post: {summary: price, deprecated: true}")
+        + "  /refunds:\n    post: {summary: refund}\n"
+    )
+    ctx = RunContext(project, "main", [], None, "s", False, sys.executable, language=LANG)
+    changed = LANG.changed_units(ctx)
+    assert sorted(c.path for c in changed) == [
+        "openapi.yaml#POST /price",
+        "openapi.yaml#POST /refunds",
+    ]
+    ctx.base_ref = None
+    assert LANG.changed_units(ctx) is None

@@ -32,7 +32,11 @@ of truth that drifts from the code.
   PR required, one human approval, no direct pushes. Agents may propose hidden
   tests; only a human merges them (#23). The gate reads that repo's `main`.
 - **Self-gate thresholds** ratchet by PR to `main`, judged by the rules on
-  `main` at that moment (#24).
+  `main` at that moment (#24). `testgate.yaml` stays hard-protected, so such
+  a PR always fails the `protected` gate by design. Landing it is a human
+  ceremony (decision B, 2026-10-23): the owner adds the repository admin role
+  as a bypass actor on the `main` ruleset, squash-merges the PR, and removes
+  the bypass again, all in one sitting. Nothing else ever bypasses the gate.
 
 ## Rules for agents
 

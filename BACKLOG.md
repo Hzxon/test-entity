@@ -125,6 +125,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 - #23 (2026-10-23): agents propose hidden tests by PR; a human merges them.
 - #24 (2026-10-23): self-gate thresholds now `min_changed: 0.5`,
   `min_score: 0.5`; revisit at each +10 points of golden + hidden coverage.
+  Config PRs land through the one-time bypass ceremony in ADR 0001.
 - #25 (2026-10-23): baseline comparison will use only hidden tests that pass
   at the base ref (issue #27).
 - #26 (2026-10-23): `tsc --noEmit` in the JS build gate when `tsconfig.json`

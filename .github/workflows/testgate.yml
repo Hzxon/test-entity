@@ -14,6 +14,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4  # the hidden suite runs node --check on JS mutants
+        with:
+          node-version: 22
+
       - name: Check out hidden tests
         uses: actions/checkout@v4
         with:

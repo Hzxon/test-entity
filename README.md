@@ -63,7 +63,7 @@ The action uploads `testgate-private.log` as the `testgate-private` artifact and
 ## Limits
 
 - Python only in v1.
-- Mutation testing runs the suite once per mutant, so it is slow on large changes. Use `max_mutants` and `timeout_s`.
+- Mutation testing runs golden + hidden once per mutant. Runs are parallel (`mutation.jobs`, default half the CPUs); use `max_mutants` and `timeout_s` to bound large changes.
 - Baseline coverage comparison needs a base ref; `--no-git` runs only check the fixed thresholds. Changed-line coverage is checked against a fixed threshold.
 - The sandbox is a subprocess with a scrubbed environment and blocked sockets. It is not a container.
 - Equivalent mutants are reduced by rules (clamps, message-only constants, dead assignments), not detected in general. A survivor can still be equivalent; read the `before`/`after` text before adding a test.

@@ -477,6 +477,7 @@ def install_mutator(monkeypatch: pytest.MonkeyPatch, per_file: dict[str, int]) -
 
 def mutation_ctx(tmp_path: Path, **cfg: Any) -> RunContext:
     changed = [ChangedFile("src/pkg/a.py", {1, 2, 3, 4, 50}), ChangedFile("src/pkg/b.py", {1})]
+    cfg.setdefault("mutation_jobs", 1)  # the fakes pop queued results, so keep runs ordered
     ctx = make_ctx(tmp_path, changed=changed, **cfg)
     write(tmp_path, "src/pkg/a.py", "a = 1\n")
     write(tmp_path, "src/pkg/b.py", "b = 1\n")
@@ -695,3 +696,40 @@ def test_protected_skips_on_first_adoption(tmp_path: Path) -> None:
     result = gates.gate_protected(ctx)
     assert result.status is Status.SKIP
     assert "first adoption" in result.summary
+
+
+def test_mutation_parallel_jobs_give_same_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
+) -> None:
+    import threading
+    import time
+
+    install_mutator(monkeypatch, {"src/pkg/a.py": 4})
+    seen: list[str] = []
+    lock = threading.Lock()
+
+    def decide(sb: Any) -> _TestRun:
+        if not sb.overrides:
+            return tr(0)
+        text = next(iter(sb.overrides.values()))
+        with lock:
+            seen.append(threading.current_thread().name)
+        time.sleep(0.05)  # let the pool overlap
+        return tr(0) if "SURVIVE" in text else tr(1, 0, 1)
+
+    fakes.decide = decide
+    serial = gates.gate_mutation(
+        mutation_ctx(tmp_path / "serial", mutation_min_score=0.0, mutation_jobs=1)
+    )
+    seen.clear()
+    parallel = gates.gate_mutation(
+        mutation_ctx(tmp_path / "parallel", mutation_min_score=0.0, mutation_jobs=4)
+    )
+    assert parallel.public == serial.public
+    assert [m["id"] for m in parallel.private["mutants"]] == [
+        m["id"] for m in serial.private["mutants"]
+    ]
+    assert [m["id"] for m in parallel.private["mutants"]] == sorted(
+        m["id"] for m in parallel.private["mutants"]
+    )
+    assert len(set(seen)) > 1  # more than one worker thread ran mutants

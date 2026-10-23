@@ -72,7 +72,7 @@ Known limits (documented in README.md):
 - Equivalent mutants are reduced by rules (clamps, message-only constants,
   dead assignments); there is no general equivalence detection.
 - Sandbox is subprocess-based with a socket block, not a container.
-- Mutation runs one sandbox per mutant, serially; slow on large diffs.
+- Mutation runs one sandbox per mutant, `mutation.jobs` at a time.
 
 ## How to run
 
@@ -103,7 +103,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 2 | ~~[ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2)~~ done | v0.1 |
 | 3 | ~~[Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3)~~ done | v0.1 |
 | 4 | ~~[Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4)~~ done | v0.1 |
-| 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |
+| 5 | ~~[Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5)~~ done | v0.1 |
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |

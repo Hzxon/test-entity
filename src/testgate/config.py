@@ -48,6 +48,7 @@ GATE_OPTIONS: dict[str, dict[str, str]] = {
         "max_shown": "mutation_max_shown",
         "timeout_s": "mutation_timeout_s",
         "auto_useless_blocks": "mutation_auto_useless_blocks",
+        "jobs": "mutation_jobs",
     },
 }
 
@@ -62,6 +63,7 @@ _POSITIVE_INTS = (
     "mutation_max_mutants",
     "mutation_max_shown",
     "mutation_timeout_s",
+    "mutation_jobs",
     "timeout_s",
 )
 

@@ -23,7 +23,7 @@ Scope decisions made with the user on 2026-10-23:
 - Ships as a CLI plus a GitHub composite action.
 - Lives in `~/dev/testgate`, its own repo.
 
-## Current state (2026-10-23)
+## Current state (2026-10-23, commit 9629ed5 pushed to origin/main)
 
 Done and verified locally:
 - Seven gates in `src/testgate/gates.py`, run in order:
@@ -74,35 +74,27 @@ uv run testgate mutants --root examples/discount --no-git   # list mutants only
 Real use: `testgate init` in a project, commit, then
 `testgate run --base origin/main --hidden <dir>` with `TESTGATE_SEED` set.
 
+## Process
+
+Work is tracked in GitHub Issues at https://github.com/Hzxon/test-entity/issues.
+Labels are the state machine; see `docs/adr/0001-project-management-on-github.md`.
+An agent may only start an issue labeled `status:ready`. Nothing is `ready` yet.
+
 ## Next to implement, in order
 
-1. **Prove the Action on GitHub.** Push the repo, open a PR against itself
-   using `action.yml`, set `TESTGATE_SEED`, use `examples/discount-hidden`
-   as the hidden dir. Fix whatever breaks. Tag `v0`.
-2. **ACH rule for the agent's tests** (`TODO(v2)` in `gates.py`). For each
-   test in `tests/auto`, count the mutants it kills that golden + hidden do
-   not. A test that kills none is `auto_useless`; report it (WARN first,
-   make it blocking by config later).
-3. **Baseline coverage comparison.** Build a sandbox from `git archive <base>`,
-   run coverage there, and fail when total coverage drops by more than
-   `max_drop` (new config key). Replaces the fixed `min_total` as the main check.
-4. **Equivalent-mutant reduction.** Cheap rules first: skip ROR mutants whose
-   result feeds a `max`/`min` clamp on the same value; skip CRP on constants
-   only used in messages. Then consider an LLM judge like ACH's, kept
-   advisory (never changes the score, only annotates survivors).
-5. **Parallel mutant runs.** `concurrent.futures` over sandboxes with a
-   `jobs` config key; keep results ordered by mutant id.
-6. **Run testgate on itself.** Add `testgate.yaml` to this repo, golden =
-   `tests/`, hidden = a private repo; make it the required check.
-7. **Second language adapter.** Start with JS/TS (vitest + fast-check +
-   Stryker). Needs: a `Runner` protocol in core.py, per-language sandbox
-   layout, a mutator (or wrap Stryker), and `language:` in testgate.yaml.
-8. **HTTP black-box mode.** Contract tests and replayed traffic against a
-   running server, language-independent. Design only after 7 lands.
+| # | Issue | Milestone |
+|---|---|---|
+| 1 | [Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1) | v0 |
+| 2 | [ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2) | v0.1 |
+| 3 | [Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3) | v0.1 |
+| 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |
+| 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |
+| 6 | [Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6) | v0.1 |
+| 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |
+| 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
 
-## Open questions for the user
+## Open questions for the user (`needs-human`)
 
-- Should `hidden` be required by default (current: yes)? Teams without a
-  hidden repo get a FAIL until they create one.
-- Should `auto_useless` block merges or only warn?
-- Hosting: GitHub only, or also GitLab CI later?
+- [#9 Should hidden tests be required by default?](https://github.com/Hzxon/test-entity/issues/9)
+- [#10 Should useless agent tests block merges or only warn?](https://github.com/Hzxon/test-entity/issues/10)
+- [#11 GitHub only, or GitLab CI too?](https://github.com/Hzxon/test-entity/issues/11)

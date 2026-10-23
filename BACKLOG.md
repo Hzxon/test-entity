@@ -104,7 +104,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 3 | ~~[Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3)~~ done | v0.1 |
 | 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |
 | 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |
-| 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ in review | v0.1 |
+| 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
 | 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
 

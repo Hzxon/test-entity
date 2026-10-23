@@ -412,3 +412,68 @@ def test_survivor_labels_keep_hidden_case_names_private():
         "case": "hidden case 3",
         "file": "hidden",
     }
+
+
+# --- docker compose start variant (#37) ------------------------------------------
+
+from testgate.languages.http import compose_cmd
+
+
+def test_compose_config_and_command(tmp_path: Path):
+    from testgate.config import load_config
+
+    (tmp_path / "testgate.yaml").write_text(
+        "language: http\npackage: svc\nimport_name: app\nhttp:\n"
+        "  start: {compose: compose.yaml, service: shop, port: 8000}\n"
+        "  health: 'http://127.0.0.1:{port}/health'\n"
+    )
+    cfg = load_config(tmp_path, None)
+    assert (cfg.http_compose, cfg.http_compose_service, cfg.http_compose_port) == (
+        "compose.yaml",
+        "shop",
+        8000,
+    )
+    assert cfg.http_start == []
+    assert compose_cmd(cfg, "testgate-abc", "up", "-d") == [
+        "docker",
+        "compose",
+        "-f",
+        "compose.yaml",
+        "-p",
+        "testgate-abc",
+        "up",
+        "-d",
+    ]
+    for bad in (
+        "  start: {compose: compose.yaml, service: shop}\n",
+        "  start: {compose: compose.yaml, service: shop, port: '8000'}\n",
+        "  start: {compose: compose.yaml, service: shop, port: 8000, extra: 1}\n",
+    ):
+        (tmp_path / "testgate.yaml").write_text(
+            "language: http\npackage: svc\nimport_name: app\nhttp:\n"
+            + bad
+            + "  health: 'http://127.0.0.1:{port}/h'\n"
+        )
+        with pytest.raises(GateError, match="http.start"):
+            load_config(tmp_path, None)
+
+
+def test_compose_start_without_docker_fails_cleanly(
+    project: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+):
+    import shutil as _shutil
+
+    monkeypatch.setattr(_shutil, "which", lambda name: None)
+    project.http_compose, project.http_compose_service, project.http_compose_port = (
+        "compose.yaml",
+        "shop",
+        8000,
+    )
+    project.http_start = []
+    sb = sandbox_for(project)
+    try:
+        proc = LANG.build(sb, project, 30)
+        assert proc.returncode == 1 and "docker not found" in proc.stderr
+        assert proc.args[:2] == ["docker", "compose"]
+    finally:
+        destroy(sb)

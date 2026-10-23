@@ -44,6 +44,9 @@ class ProjectConfig:
     import_name: str  # top-level module the build gate imports, e.g. "discount"; js: entry file
     language: str = "python"  # "python" | "js" | "http"; picks the adapter in languages/
     http_start: list[str] = field(default_factory=list)  # service command; "{port}" is substituted
+    http_compose: str | None = None  # compose file relative to the package; replaces http_start
+    http_compose_service: str = ""  # the compose service whose port is published
+    http_compose_port: int = 0  # the container port of that service
     http_health: str = ""  # URL polled until 2xx; "{port}" is substituted
     http_startup_timeout_s: int = 60
     http_openapi: str | None = None  # OpenAPI document, repo-relative; enables route coverage

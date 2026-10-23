@@ -1,0 +1,5 @@
+services:
+  shop:
+    build: .
+    ports:
+      - "8000"  # an ephemeral host port; testgate asks compose which one

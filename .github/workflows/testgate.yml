@@ -1,0 +1,30 @@
+# testgate gating its own repository. Config comes from testgate.yaml on main;
+# hidden tests come from the private repo Hzxon/testgate-hidden via a
+# read-only deploy key held in the TESTGATE_HIDDEN_SSH_KEY secret.
+name: testgate
+
+on:
+  pull_request:
+
+jobs:
+  testgate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out hidden tests
+        uses: actions/checkout@v4
+        with:
+          repository: Hzxon/testgate-hidden
+          ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}
+          path: .testgate-hidden
+
+      - name: Run testgate
+        uses: ./
+        with:
+          base: origin/${{ github.base_ref }}
+          hidden-dir: ${{ github.workspace }}/.testgate-hidden
+        env:
+          TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}

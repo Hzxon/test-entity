@@ -18,7 +18,8 @@ from testgate.report import build_report, to_markdown, write_outputs
 NEXT_STEPS = """\
 Next steps:
   1. Set the TESTGATE_SEED secret in your CI (any random string); it fixes the Hypothesis seed.
-  2. Create the hidden tests repo and add TESTGATE_HIDDEN_REPO and TESTGATE_HIDDEN_TOKEN secrets.
+  2. Create the private hidden tests repo, add a read-only deploy key, and set the
+     TESTGATE_HIDDEN_REPO and TESTGATE_HIDDEN_SSH_KEY secrets.
   3. Protect main with the "testgate" required check.
 """
 

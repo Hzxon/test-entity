@@ -1,0 +1,30 @@
+# testgate gating its own repository. Read from `main` by CI, never from the PR.
+package: src/testgate
+import_name: testgate
+tests:
+  golden: tests/golden  # frozen behaviour tests; the full dev suite in tests/ runs in ci.yml
+  auto: tests/auto  # does not exist yet; an agent's own tests would go here
+  hidden_env: TESTGATE_HIDDEN_DIR  # CI checks out Hzxon/testgate-hidden into .testgate-hidden
+protected:
+  - tests/golden
+  - testgate.yaml
+gates:
+  # testgate's own source legitimately names TESTGATE, PYTEST_CURRENT_TEST and
+  # tests/hidden, which the hygiene scan treats as test-detection attempts.
+  hygiene: false
+  tests:
+    repeats: 2
+  hidden:
+    required: true
+  coverage:
+    min_total: 0.0
+    min_changed: 0.0  # golden + hidden are small; the dev suite covers the rest
+    max_drop: 0.02
+  mutation:
+    min_score: 0.3  # ratchet up as golden + hidden grow
+    max_mutants: 8  # each mutant runs golden + hidden; keep CI under a few minutes
+    max_shown: 7
+    timeout_s: 120
+sandbox:
+  network: false
+  timeout_s: 600

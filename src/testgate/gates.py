@@ -115,6 +115,9 @@ def _posix(root: Path, path: Path) -> str:
 def gate_protected(ctx: RunContext) -> GateResult:
     if ctx.base_ref is None:
         return _skip("protected", "no base ref")
+    if ctx.config.raw.get("_source") == "worktree":
+        # First adoption: nothing at the base ref defines the protected surface yet.
+        return _skip("protected", "first adoption: testgate.yaml is not at the base ref")
     root = ctx.config.root
     changed: list[str] = []
     for path in ctx.config.protected:

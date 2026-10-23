@@ -14,19 +14,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The hidden tests live in a private repository the PR author cannot read.
+      # Give CI a read-only deploy key for it: `ssh-keygen -t ed25519 -f key`,
+      # add key.pub as a deploy key on that repo, store key in the secret
+      # TESTGATE_HIDDEN_SSH_KEY, and set TESTGATE_HIDDEN_REPO to owner/name.
       - name: Check out hidden tests
         if: env.HIDDEN_REPO != ''
         uses: actions/checkout@v4
         with:
           repository: ${{ env.HIDDEN_REPO }}
-          token: ${{ secrets.TESTGATE_HIDDEN_TOKEN }}
+          ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}
           path: .testgate-hidden
 
       - name: Run testgate
         uses: <owner>/testgate@v0  # placeholder: replace <owner>
         with:
           base: origin/${{ github.base_ref }}
-          hidden-dir: .testgate-hidden
+          hidden-dir: ${{ github.workspace }}/.testgate-hidden
         env:
           TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
 

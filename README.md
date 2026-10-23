@@ -49,7 +49,7 @@ Hidden tests live outside the repo. The path comes from `hidden:` in `testgate.y
 - uses: actions/checkout@v4
   with:
     repository: ${{ secrets.TESTGATE_HIDDEN_REPO }}
-    token: ${{ secrets.TESTGATE_HIDDEN_TOKEN }}
+    ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}  # read-only deploy key of the hidden repo
     path: .testgate-hidden
 - uses: OWNER/testgate@v0
   env:

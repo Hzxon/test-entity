@@ -687,3 +687,11 @@ def test_coverage_baseline_skipped_reasons(
 
     ctx.base_ref = None
     assert gates.gate_coverage(ctx).public["baseline_skipped"] == "no base ref"
+
+
+def test_protected_skips_on_first_adoption(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.config.raw["_source"] = "worktree"
+    result = gates.gate_protected(ctx)
+    assert result.status is Status.SKIP
+    assert "first adoption" in result.summary

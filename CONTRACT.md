@@ -220,7 +220,7 @@ def run_gates(ctx: RunContext, only: list[str] | None = None) -> list[GateResult
 
 Gate semantics:
 
-- **protected** — for each path in `config.protected`: compare `gitinfo.tree_hash(root, None, path)` with `gitinfo.tree_hash(root, base_ref, path)`. Any difference -> FAIL, public `changed: [paths]`. Path absent in both -> ignore. Absent at base but present now -> FAIL (new protected file was not approved). `base_ref None` -> SKIP "no base ref".
+- **protected** — SKIP "first adoption" when the config came from the worktree (`raw["_source"] == "worktree"`), since nothing at the base ref defines the surface yet. Otherwise, for each path in `config.protected`: compare `gitinfo.tree_hash(root, None, path)` with `gitinfo.tree_hash(root, base_ref, path)`. Any difference -> FAIL, public `changed: [paths]`. Path absent in both -> ignore. Absent at base but present now -> FAIL (new protected file was not approved). `base_ref None` -> SKIP "no base ref".
 - **hygiene** — static checks on the working tree, all public:
   - `auto` dir, if present, may only contain `test_*.py`, `__init__.py`, and non-`.py` data files; a `conftest.py` or any other `.py` -> FAIL.
   - No `.py` under `auto` or `package` may reference, as a string or name: `PYTEST_CURRENT_TEST`, `TESTGATE`, `HYPOTHESIS_SEED`, `tests/hidden`, `hidden_dir`, `sys.modules["pytest"]`, `monkeypatch.setattr(pytest`, `os.environ.get("CI"` — each hit -> FAIL with file:line (test-detection attempts).
@@ -289,7 +289,7 @@ testgate mutants [--root DIR] [--base REF] [--no-git] [--max N]
 
 - `testgate.yaml` — the YAML above with comments explaining every key, `package:`/`import_name:` filled by init.
 - `test_example.py` — one golden test plus one Hypothesis property test showing the pattern.
-- `testgate.yml` — GitHub workflow: on pull_request; checkout with fetch-depth 0; optional checkout of the hidden repo into `.testgate-hidden` using `secrets.TESTGATE_HIDDEN_REPO` / `secrets.TESTGATE_HIDDEN_TOKEN`; run `uses: <owner>/testgate@v0` (placeholder) with `base: origin/${{ github.base_ref }}`; `TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}`; upload `testgate-private.log` as an artifact.
+- `testgate.yml` — GitHub workflow: on pull_request; checkout with fetch-depth 0; optional checkout of the hidden repo into `.testgate-hidden` using `secrets.TESTGATE_HIDDEN_REPO` and a read-only deploy key in `secrets.TESTGATE_HIDDEN_SSH_KEY`; run `uses: <owner>/testgate@v0` (placeholder) with `base: origin/${{ github.base_ref }}`; `TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}`; upload `testgate-private.log` as an artifact.
 
 ## action.yml (repo root)
 

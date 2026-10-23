@@ -23,11 +23,14 @@ Scope decisions made with the user on 2026-10-23:
 - Ships as a CLI plus a GitHub composite action.
 - Lives in `~/dev/testgate`, its own repo.
 
-## Current state (2026-10-23, main at ac5b38c, tag v0)
+## Current state (2026-10-23, main after PR #14, tag v0 at ac5b38c)
 
 Done and verified locally:
 - Seven gates in `src/testgate/gates.py`, run in order:
   protected, hygiene, build, tests, hidden, coverage, mutation.
+  The mutation gate also applies the ACH rule: an auto test file that kills
+  no mutant golden + hidden missed is `auto_useless` (WARN, or FAIL with
+  `gates.mutation.auto_useless_blocks: true`).
   `protected` failing stops the run. Config is read from the base ref
   (`git show <base>:testgate.yaml`), never from the working tree.
 - `src/testgate/mutator.py`: AST mutator, operators ROR/AOR/LCR/UOI/CRP/RVR/SBR,
@@ -91,7 +94,7 @@ An agent may only start an issue labeled `status:ready`. Nothing is `ready` yet.
 | # | Issue | Milestone |
 |---|---|---|
 | 1 | ~~[Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1)~~ done | v0 |
-| 2 | [ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2) | v0.1 |
+| 2 | ~~[ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2)~~ done | v0.1 |
 | 3 | [Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3) | v0.1 |
 | 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |
 | 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |

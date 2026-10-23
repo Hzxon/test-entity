@@ -76,7 +76,7 @@ HTTP mode (ADR 0002) starts the service from `http.start` with `{port}` substitu
   expect: {status: 200, json: {price: 90.0}}   # json is a subset match
 ```
 
-`expect` also takes `headers`, `text` (substring) and `schema` (JSON Schema). The network block is best effort for the service process: proxy variables point at a dead port, and the sandbox cannot stop a service that ignores them.
+`expect` also takes `headers`, `text` (substring) and `schema` (JSON Schema). `examples/shop-http` and `examples/shop-http-cheat` are the HTTP pair: a stdlib `http.server` shop that needs nothing installed. The network block is best effort for the service process: proxy variables point at a dead port, and the sandbox cannot stop a service that ignores them.
 
 JS sandboxes symlink the project's `node_modules`, copy `package.json`, and block the network with a `--require` preload (`localhost` DNS stays allowed so vitest can start). Hidden tests import sources as if they lived in `tests/hidden/` of the project.
 

@@ -114,7 +114,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 11 | ~~[HTTP mode 1/5: skeleton, launcher, fixture runner](https://github.com/Hzxon/test-entity/issues/33)~~ in review | v1 |
 | 12 | ~~[HTTP mode 2/5: route coverage](https://github.com/Hzxon/test-entity/issues/34)~~ in review | v1 |
 | 13 | ~~[HTTP mode 3/5: differential gate](https://github.com/Hzxon/test-entity/issues/35)~~ in review | v1 |
-| 14 | [HTTP mode 4/5: example pair and e2e](https://github.com/Hzxon/test-entity/issues/36) | v1 |
+| 14 | ~~[HTTP mode 4/5: example pair and e2e](https://github.com/Hzxon/test-entity/issues/36)~~ in review | v1 |
 | 15 | [HTTP mode 5/5: docker compose start](https://github.com/Hzxon/test-entity/issues/37) | v1 |
 | 9 | [Baseline coverage: only hidden tests that pass at base](https://github.com/Hzxon/test-entity/issues/27) | v1 |
 | 10 | ~~[JS build gate: tsc --noEmit when tsconfig.json exists](https://github.com/Hzxon/test-entity/issues/28)~~ done | v1 |

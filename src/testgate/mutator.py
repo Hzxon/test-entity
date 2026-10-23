@@ -214,12 +214,41 @@ def _clamp_compares(tree: ast.Module) -> set[int]:
     return found
 
 
+_TYPING_ROOTS = {
+    "Callable",
+    "Union",
+    "Optional",
+    "Literal",
+    "TypeAlias",
+    "Annotated",
+    "Mapping",
+    "Sequence",
+    "Iterable",
+    "dict",
+    "list",
+    "tuple",
+    "set",
+    "type",
+}
+
+
+def _is_type_alias(node: ast.AST) -> bool:
+    """``Send = Callable[[Case], Response]``: read only by annotations, which are not evaluated."""
+    if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Subscript):
+        return False
+    root: ast.AST = node.value.value
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id in _TYPING_ROOTS
+
+
 def _dead_assigns(tree: ast.Module) -> set[int]:
-    """ids of Assign/AugAssign statements inside functions whose target is never read.
+    """ids of Assign/AugAssign statements inside functions whose target is never read,
+    plus module-level type aliases.
 
     Deleting such a statement cannot change behaviour, so the SBR mutant is equivalent.
     """
-    dead: set[int] = set()
+    dead: set[int] = {id(n) for n in tree.body if _is_type_alias(n)}
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue

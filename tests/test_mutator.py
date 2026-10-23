@@ -225,3 +225,10 @@ def test_sbr_skipped_on_assignment_never_read():
 
 def test_sbr_kept_for_module_level_assignment():
     assert gen("CONFIG = {}\n", {1})[0].operator == "SBR"
+
+
+def test_sbr_skipped_on_module_level_type_alias():
+    src = "from collections.abc import Callable\nSend = Callable[[int], str]\nX = compute()\n"
+    ms = {m.line: m.operator for m in gen(src, {2, 3})}
+    assert 2 not in ms  # a type alias is read only by annotations
+    assert ms[3] == "SBR"  # a real module-level assignment still is

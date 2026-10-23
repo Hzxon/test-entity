@@ -62,3 +62,17 @@ def test_cheat_http_example_fails_without_leaking_hidden_names(tmp_path: Path) -
         assert name not in public
     assert any(name in priv.read_text() for name in names)
     assert code == 1
+
+
+COMPOSE = EXAMPLES / "shop-http-compose"
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker not on PATH")
+def test_compose_http_example_passes(tmp_path: Path) -> None:
+    code, out, _ = _run_cli(COMPOSE, tmp_path)
+    report = json.loads(out.read_text())
+    gates = {g["name"]: g for g in report["gates"]}
+    assert report["verdict"] == "pass", gates
+    assert gates["build"]["status"] == "pass"
+    assert gates["hidden"]["passed"] == 7
+    assert code == 0

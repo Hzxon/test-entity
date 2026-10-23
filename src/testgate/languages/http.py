@@ -320,8 +320,18 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
+_PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
+
+
+def compose_cmd(cfg: ProjectConfig, project: str, *args: str) -> list[str]:
+    """``docker compose -f <file> -p <project> <args>``; the file is relative to the package."""
+    assert cfg.http_compose is not None
+    return ["docker", "compose", "-f", cfg.http_compose, "-p", project, *args]
+
+
 class _Service:
-    """The service under test, started from ``cwd`` and killed with its process group."""
+    """The service under test: a subprocess from ``cwd`` killed with its process group,
+    or a docker compose project when the config uses the compose form."""
 
     def __init__(self, cfg: ProjectConfig, cwd: Path, env: dict[str, str], port: int, log: Path):
         self.cfg = cfg
@@ -330,21 +340,27 @@ class _Service:
         self.port = port
         self.log = log
         self.proc: subprocess.Popen[bytes] | None = None
+        self.project: str | None = None  # compose project name once started
 
     @property
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
     def start(self, timeout_s: int) -> tuple[bool, str]:
-        argv = [a.replace("{port}", str(self.port)) for a in self.cfg.http_start]
+        if self.cfg.http_compose:
+            ok, why = self._start_compose(timeout_s)
+            if not ok:
+                return False, why
+        else:
+            argv = [a.replace("{port}", str(self.port)) for a in self.cfg.http_start]
+            with self.log.open("ab") as out:
+                self.proc = subprocess.Popen(
+                    argv, cwd=self.cwd, env=self.env, stdout=out, stderr=out, start_new_session=True
+                )
         health = self.cfg.http_health.replace("{port}", str(self.port))
-        with self.log.open("ab") as out:
-            self.proc = subprocess.Popen(
-                argv, cwd=self.cwd, env=self.env, stdout=out, stderr=out, start_new_session=True
-            )
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
+            if self.proc is not None and self.proc.poll() is not None:
                 return False, f"service exited with {self.proc.returncode} before becoming healthy"
             try:
                 with urllib.request.urlopen(health, timeout=2) as r:
@@ -355,7 +371,47 @@ class _Service:
             time.sleep(0.2)
         return False, f"health {health} not 2xx within {timeout_s}s"
 
+    def _docker_env(self) -> dict[str, str]:
+        # the docker CLI talks to the daemon over a socket; the sandbox's dead proxy must not apply
+        return {k: v for k, v in self.env.items() if k not in _PROXY_VARS}
+
+    def _compose(self, *args: str, timeout_s: int = 600) -> subprocess.CompletedProcess[str]:
+        assert self.project is not None
+        proc = subprocess.run(
+            compose_cmd(self.cfg, self.project, *args),
+            cwd=self.cwd,
+            env=self._docker_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        with self.log.open("a", encoding="utf-8") as out:
+            out.write(f"$ {' '.join(proc.args)}\n{proc.stdout}{proc.stderr}")
+        return proc
+
+    def _start_compose(self, timeout_s: int) -> tuple[bool, str]:
+        if shutil.which("docker") is None:
+            return False, "docker not found on PATH"
+        self.project = f"testgate-{random.Random().randrange(16**8):08x}"
+        up = self._compose("up", "-d", "--build", "--remove-orphans", timeout_s=max(timeout_s, 60))
+        if up.returncode != 0:
+            return False, f"docker compose up failed: {up.stderr.strip()[-300:]}"
+        mapped = self._compose(
+            "port", self.cfg.http_compose_service, str(self.cfg.http_compose_port)
+        )
+        host_port = mapped.stdout.strip().rsplit(":", 1)[-1]
+        if mapped.returncode != 0 or not host_port.isdigit():
+            return False, f"docker compose port gave no mapping: {mapped.stdout.strip()!r}"
+        self.port = int(host_port)
+        return True, ""
+
     def stop(self) -> None:
+        if self.project is not None:
+            self._compose("logs", "--no-color")
+            self._compose("down", "-v", "--remove-orphans")
+            self.project = None
+            return
         if self.proc is None or self.proc.poll() is not None:
             return
         try:
@@ -424,7 +480,11 @@ class HttpLanguage:
             ok, why = svc.start(min(timeout_s, cfg.http_startup_timeout_s))
         finally:
             svc.stop()
-        argv = [a.replace("{port}", str(svc.port)) for a in cfg.http_start]
+        argv = (
+            compose_cmd(cfg, "<project>", "up")
+            if cfg.http_compose
+            else [a.replace("{port}", str(svc.port)) for a in cfg.http_start]
+        )
         return subprocess.CompletedProcess(argv, 0 if ok else 1, svc.output(), why)
 
     def _files(self, sb: Sandbox, names: list[str], files: list[str] | None) -> list[Path]:

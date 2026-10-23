@@ -1,0 +1,18 @@
+- name: ten percent off at the threshold
+  request: {method: POST, path: /price, json: {subtotal: 100, coupon: 0}}
+  expect: {status: 200, json: {price: 90.0, currency: USD}, headers: {X-Service: shop}}
+- name: no discount below the threshold
+  request: {method: POST, path: /price, json: {subtotal: 99, coupon: 0}}
+  expect: {status: 200, json: {price: 99.0}}
+- name: coupon applies after the discount
+  request: {method: POST, path: /price, json: {subtotal: 100, coupon: 20}}
+  expect: {status: 200, json: {price: 70.0}}
+- name: price never goes below zero
+  request: {method: POST, path: /price, json: {subtotal: 10, coupon: 50}}
+  expect: {status: 200, json: {price: 0.0}}
+- name: negative subtotal is rejected
+  request: {method: POST, path: /price, json: {subtotal: -1, coupon: 0}}
+  expect: {status: 400, schema: {type: object, required: [error]}}
+- name: health answers
+  request: {path: /health}
+  expect: {status: 200, json: {ok: true}}

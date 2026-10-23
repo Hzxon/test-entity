@@ -182,9 +182,27 @@ def load_config(root: Path, base_ref: str | None) -> ProjectConfig:
     _check_keys("http", http, HTTP_KEYS)
     if "start" in http:
         start = http["start"]
-        if not isinstance(start, list) or not all(isinstance(a, str) for a in start) or not start:
-            raise GateError(f"{CONFIG_FILE}: http.start must be a non-empty list of strings")
-        cfg.http_start = list(start)
+        if isinstance(start, dict):
+            _check_keys("http.start", start, {"compose", "service", "port"})
+            if not all(k in start for k in ("compose", "service", "port")):
+                raise GateError(
+                    f"{CONFIG_FILE}: http.start compose form needs compose, service, port"
+                )
+            cfg.http_compose = _string("http.start.compose", start["compose"])
+            cfg.http_compose_service = _string("http.start.service", start["service"])
+            if (
+                not isinstance(start["port"], int)
+                or isinstance(start["port"], bool)
+                or start["port"] < 1
+            ):
+                raise GateError(f"{CONFIG_FILE}: http.start.port must be a positive integer")
+            cfg.http_compose_port = start["port"]
+        elif not isinstance(start, list) or not all(isinstance(a, str) for a in start) or not start:
+            raise GateError(
+                f"{CONFIG_FILE}: http.start must be a non-empty list of strings or a compose mapping"
+            )
+        else:
+            cfg.http_start = list(start)
     if "health" in http:
         cfg.http_health = _string("http.health", http["health"])
     if "startup_timeout_s" in http:
@@ -198,7 +216,7 @@ def load_config(root: Path, base_ref: str | None) -> ProjectConfig:
         ):
             raise GateError(f"{CONFIG_FILE}: http.env must map strings to strings")
         cfg.http_env = dict(env)
-    if language == "http" and (not cfg.http_start or not cfg.http_health):
+    if language == "http" and (not (cfg.http_start or cfg.http_compose) or not cfg.http_health):
         raise GateError(f"{CONFIG_FILE}: language http needs http.start and http.health")
 
     _validate(cfg)

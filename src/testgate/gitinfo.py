@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 import subprocess
+import tarfile
 from pathlib import Path
 
 from testgate.core import ChangedFile
@@ -168,3 +170,26 @@ def tree_hash(root: Path, ref: str | None, path: str) -> str | None:
     if kind.stdout.strip() == "blob":
         return _git(root, "rev-parse", f"{ref}:./{path}").stdout.strip()
     return _digest(ref_pairs(root, ref, path))
+
+
+def archive(root: Path, ref: str, paths: list[str], dest: Path) -> list[str]:
+    """Extract `paths` as they are at `ref` into `dest`; returns the paths that existed.
+
+    Paths are relative to `root`, which may be a subdirectory of the repository.
+    Missing paths are skipped so a project can gain test dirs over time.
+    """
+    present = [p for p in paths if _git(root, "cat-file", "-e", f"{ref}:./{p}").returncode == 0]
+    if not present:
+        return []
+    proc = subprocess.run(
+        ["git", "-c", "core.quotepath=off", "archive", "--format=tar", ref, "--", *present],
+        cwd=root,
+        check=False,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git archive failed: {proc.stderr.decode(errors='replace').strip()}")
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tar:
+        tar.extractall(dest, filter="data")
+    return present

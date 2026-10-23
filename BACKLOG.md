@@ -64,7 +64,6 @@ Not verified:
 
 Known limits (documented in README.md):
 - Python only.
-- No baseline coverage comparison against the base ref (only thresholds).
 - Equivalent mutants are reported as survivors (e.g. `< 0` vs `<= 0` before a
   clamp). No equivalence detection.
 - Sandbox is subprocess-based with a socket block, not a container.
@@ -95,7 +94,7 @@ An agent may only start an issue labeled `status:ready`. Nothing is `ready` yet.
 |---|---|---|
 | 1 | ~~[Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1)~~ done | v0 |
 | 2 | ~~[ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2)~~ done | v0.1 |
-| 3 | [Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3) | v0.1 |
+| 3 | ~~[Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3)~~ in review (#15) | v0.1 |
 | 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |
 | 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |
 | 6 | [Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6) | v0.1 |

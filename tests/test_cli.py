@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -168,3 +169,51 @@ def test_mutants_lists_without_running_tests(
     out = capsys.readouterr().out
     assert "src/calc/ops.py:2:" in out
     assert " -> " in out
+
+
+def git(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_run_fails_when_coverage_drops_below_base(tmp_path: Path) -> None:
+    """A change that deletes the test covering a branch drops coverage and fails the gate."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    hidden = make_project(root, good=True)
+    ops = root / "src/calc/ops.py"
+    ops.write_text(
+        "def add(a, b):\n    return a + b\n\n\ndef sign(x):\n    if x < 0:\n"
+        "        return -1\n    return 1\n"
+    )
+    golden = root / "tests/golden/test_ops.py"
+    golden.write_text(
+        golden.read_text() + "\n\nfrom calc.ops import sign\n\n\n"
+        "def test_sign():\n    assert sign(-5) == -1\n    assert sign(5) == 1\n"
+    )
+    (root / "testgate.yaml").write_text(
+        "package: src/calc\nimport_name: calc\n"
+        f"tests:\n  hidden: ../{hidden.name}\n"
+        "protected: []\n"
+        "gates:\n  tests: {repeats: 1}\n  coverage: {min_changed: 0.0, max_drop: 0.0}\n"
+        "  mutation: false\n"
+    )
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    # the "PR": drop the test of the negative branch
+    golden.write_text(golden.read_text().replace("    assert sign(-5) == -1\n", ""))
+
+    out = tmp_path / "out.json"
+    code = main(["run", "--root", str(root), "--base", "main", "--json", str(out), "--quiet"])
+    report = json.loads(out.read_text())
+    coverage = next(g for g in report["gates"] if g["name"] == "coverage")
+    assert coverage["status"] == "fail"
+    assert "dropped" in coverage["summary"]
+    assert coverage["baseline_total"] == 1.0
+    assert coverage["drop"] > 0
+    assert code == 1

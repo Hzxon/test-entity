@@ -53,6 +53,7 @@ class ProjectConfig:
     hidden_required: bool = True  # FAIL (not SKIP) when no hidden dir is available
     coverage_min_total: float = 0.0  # 0..1 minimum total line coverage
     coverage_min_changed: float = 0.9  # 0..1 minimum coverage of changed lines
+    coverage_max_drop: float = 0.0  # 0..1 allowed drop of total coverage vs the base ref
     mutation_min_score: float = 0.8  # 0..1 killed / generated
     mutation_max_mutants: int = 50  # sampled with the seed when more are eligible
     mutation_max_shown: int = 7  # survivors listed per changed file (Google caps at 7 x files)

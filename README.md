@@ -31,7 +31,7 @@ Run it locally with `testgate run --base origin/main`, or `testgate run --no-git
 | build | Package imports and compiles | exit code | yes |
 | tests | Golden and auto tests pass, `repeats` times (flaky check) | pass/fail counts | yes |
 | hidden | Hidden tests pass | pass/fail counts | yes |
-| coverage | Total and changed-line coverage | percentages, uncovered file:line | yes |
+| coverage | Total and changed-line coverage, and total coverage must not drop vs the base ref by more than `max_drop` | percentages, uncovered file:line, baseline total and drop | yes |
 | mutation | Mutants of changed, covered lines are killed by golden + hidden tests; each auto test file must kill a mutant they missed (the ACH rule) | generated, killed, score, survivor file:line, `auto_useless` file names | yes below `min_score`; useless auto tests warn, or fail with `auto_useless_blocks: true` |
 
 ## Hidden tests and the seed
@@ -64,7 +64,7 @@ The action uploads `testgate-private.log` as the `testgate-private` artifact and
 
 - Python only in v1.
 - Mutation testing runs the suite once per mutant, so it is slow on large changes. Use `max_mutants` and `timeout_s`.
-- No baseline coverage comparison yet. Changed-line coverage is checked against a fixed threshold.
+- Baseline coverage comparison needs a base ref; `--no-git` runs only check the fixed thresholds. Changed-line coverage is checked against a fixed threshold.
 - The sandbox is a subprocess with a scrubbed environment and blocked sockets. It is not a container.
 
 ## Credits

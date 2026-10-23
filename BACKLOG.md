@@ -56,11 +56,16 @@ Verified on GitHub (2026-10-23, tag `v0` at ac5b38c):
   showed the honest example PASS and the cheat example FAIL on hidden tests,
   PR #13 showed that editing a protected golden test fails `protected`.
 - `--root` may be a subdirectory of the repository (monorepo layout).
+- testgate gates its own repo: `testgate.yaml` at the root, frozen tests in
+  `tests/golden`, hidden tests in the private repo `Hzxon/testgate-hidden`
+  (read-only deploy key, secret `TESTGATE_HIDDEN_SSH_KEY`), workflow
+  `.github/workflows/testgate.yml`, check `testgate` required on `main`.
+  Thresholds start low (`min_score: 0.3`, `min_changed: 0.0`); ratchet them
+  as golden + hidden grow.
 
 Not verified:
 - The wheel has not been built; templates ship via `packages = ["src/testgate"]`
   but nobody checked the built artifact.
-- `TESTGATE_SEED` is not set in the repo yet, so CI runs with a random seed.
 
 Known limits (documented in README.md):
 - Python only.
@@ -99,7 +104,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 3 | ~~[Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3)~~ done | v0.1 |
 | 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |
 | 5 | [Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5) | v0.1 |
-| 6 | [Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6) | v0.1 |
+| 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ in review | v0.1 |
 | 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
 

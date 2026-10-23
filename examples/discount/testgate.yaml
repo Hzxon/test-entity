@@ -5,7 +5,7 @@ tests:
   auto: tests/auto
   hidden: ../discount-hidden
 gates:
-  protected: false
+  protected: true  # skipped under --no-git; active in the self-test workflow
   mutation:
     enabled: true
     min_score: 0.5

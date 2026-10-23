@@ -76,7 +76,9 @@ def changed_lines(root: Path, base_ref: str) -> list[ChangedFile]:
     mb = _git(root, "merge-base", base_ref, "HEAD")
     if mb.returncode != 0:
         raise RuntimeError(f"git merge-base failed: {mb.stderr.strip()}")
-    diff = _git(root, "diff", "--unified=0", "--no-color", "--no-ext-diff", mb.stdout.strip())
+    diff = _git(
+        root, "diff", "--unified=0", "--no-color", "--no-ext-diff", "--relative", mb.stdout.strip()
+    )
     if diff.returncode != 0:
         raise RuntimeError(f"git diff failed: {diff.stderr.strip()}")
     result = _parse_diff(diff.stdout)
@@ -96,7 +98,7 @@ def changed_lines(root: Path, base_ref: str) -> list[ChangedFile]:
 
 
 def show_file(root: Path, ref: str, path: str) -> str | None:
-    proc = _git(root, "show", f"{ref}:{path}")
+    proc = _git(root, "show", f"{ref}:./{path}")
     return proc.stdout if proc.returncode == 0 else None
 
 
@@ -160,9 +162,9 @@ def tree_hash(root: Path, ref: str | None, path: str) -> str | None:
             return proc.stdout.strip() if proc.returncode == 0 else None
         return _digest(worktree_pairs(root, path))
 
-    kind = _git(root, "cat-file", "-t", f"{ref}:{path}")
+    kind = _git(root, "cat-file", "-t", f"{ref}:./{path}")
     if kind.returncode != 0:
         return None
     if kind.stdout.strip() == "blob":
-        return _git(root, "rev-parse", f"{ref}:{path}").stdout.strip()
+        return _git(root, "rev-parse", f"{ref}:./{path}").stdout.strip()
     return _digest(ref_pairs(root, ref, path))

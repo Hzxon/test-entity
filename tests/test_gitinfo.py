@@ -157,3 +157,23 @@ def test_tree_hash_absent(repo: Path) -> None:
 def test_pairs_agree(repo: Path) -> None:
     assert gitinfo.worktree_pairs(repo, "pkg") == gitinfo.ref_pairs(repo, "main", "pkg")
     assert [p for p, _ in gitinfo.worktree_pairs(repo, "pkg")] == ["a.py", "b.py"]
+
+
+def test_root_may_be_a_subdirectory_of_the_repo(repo: Path) -> None:
+    """A monorepo project: every path is relative to `root`, not the repo root."""
+    sub = repo / "apps" / "shop"
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "m.py").write_text("a = 1\nb = 2\n")
+    (sub / "testgate.yaml").write_text("package: src\n")
+    commit_all(repo, "add subproject")
+    (sub / "src" / "m.py").write_text("a = 1\nb = 3\n")
+    (repo / "pkg" / "a.py").write_text("changed outside the subproject\n")
+
+    assert by_path(gitinfo.changed_lines(sub, "main")) == {"src/m.py": {2}}
+    assert gitinfo.show_file(sub, "main", "testgate.yaml") == "package: src\n"
+    assert gitinfo.tree_hash(sub, "main", "testgate.yaml") == gitinfo.tree_hash(
+        sub, None, "testgate.yaml"
+    )
+    assert gitinfo.tree_hash(sub, "main", "src") != gitinfo.tree_hash(sub, None, "src")
+    (sub / "src" / "m.py").write_text("a = 1\nb = 2\n")
+    assert gitinfo.tree_hash(sub, "main", "src") == gitinfo.tree_hash(sub, None, "src")

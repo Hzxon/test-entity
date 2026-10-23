@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -96,3 +97,10 @@ class PythonLanguage:
         self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
     ) -> list[Mutant]:
         return mutator.generate_mutants(path, source, lines, seed, max_mutants)
+
+    def failed_files(self, run: TestRun) -> set[str]:
+        # pytest -rA lines: "FAILED tests/hidden/test_x.py::test_y - ..." / "ERROR tests/hidden/test_x.py"
+        return {m.group(1) for m in _FAILED_LINE.finditer(run.output)}
+
+
+_FAILED_LINE = re.compile(r"^(?:FAILED|ERROR) (\S+?\.py)(?:::|\s|$)", re.MULTILINE)

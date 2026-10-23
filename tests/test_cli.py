@@ -239,3 +239,34 @@ def test_run_fails_when_coverage_drops_below_base(tmp_path: Path) -> None:
     assert coverage["baseline_total"] == 1.0
     assert coverage["drop"] > 0
     assert code == 1
+
+
+def test_run_baseline_survives_hidden_tests_for_new_code(tmp_path: Path) -> None:
+    """A hidden test that imports a module added by the PR is excluded at base, not fatal (#27)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    hidden = make_project(root, good=True)
+    (root / "testgate.yaml").write_text(
+        "package: src/calc\nimport_name: calc\n"
+        f"tests:\n  hidden: ../{hidden.name}\n"
+        "protected: []\n"
+        "gates:\n  tests: {repeats: 1}\n  coverage: {min_changed: 0.0, max_drop: 1.0}\n"
+        "  mutation: false\n"
+    )
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    # the PR adds a module, and a hidden test for it lands alongside
+    (root / "src/calc/extra.py").write_text("def triple(x):\n    return x * 3\n")
+    (hidden / "test_extra.py").write_text(
+        "from calc.extra import triple\n\n\ndef test_hidden_triple():\n    assert triple(2) == 6\n"
+    )
+    out = tmp_path / "out.json"
+    code = main(["run", "--root", str(root), "--base", "main", "--json", str(out), "--quiet"])
+    report = json.loads(out.read_text())
+    coverage = next(g for g in report["gates"] if g["name"] == "coverage")
+    assert "baseline_skipped" not in coverage
+    assert coverage["baseline_hidden_excluded"] == 1
+    assert coverage["baseline_total"] == 1.0
+    assert coverage["drop"] is not None
+    assert code == 0

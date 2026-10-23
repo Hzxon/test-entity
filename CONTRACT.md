@@ -203,6 +203,12 @@ def generate_mutants(path: str, source: str, lines: set[int], seed: str, max_mut
     # If more than max_mutants lines are eligible, sample deterministically with random.Random(seed).
     # Mutant.id = f"{path}:{line}:{operator}".
     # Syntax errors in `source` -> return [].
+    # Equivalent-mutant rules (skip the operator, other operators on the line stay eligible):
+    #   ROR on a clamp: `if x < c: x = c` (also `x = Decimal(c)`-style numeric wraps) or
+    #       `if x < c: return c` followed by `return x` -- swapping < and <= cannot change behaviour.
+    #   CRP on message-only constants: inside raise, f-strings, `"...".format(...)` args and `"..." % x`.
+    #   AOR on `"..." % x` (the % is formatting, not arithmetic).
+    #   SBR on an Assign/AugAssign inside a function whose target Name is never read in that function.
 ```
 - Allowed imports: `core`.
 

@@ -147,27 +147,138 @@ def _is_all_assign(node: ast.AST) -> bool:
     )
 
 
+_CLAMP_OPS = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+
+
+_NUMERIC_CTORS = {"Decimal", "Fraction", "int", "float"}
+
+
+def _same(a: ast.AST, b: ast.AST) -> bool:
+    return ast.unparse(a) == ast.unparse(b)
+
+
+def _same_value(value: ast.AST, bound: ast.AST) -> bool:
+    """``value`` equals ``bound`` at runtime: same text, or ``Decimal(bound)``-style wrap."""
+    if _same(value, bound):
+        return True
+    return (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in _NUMERIC_CTORS
+        and len(value.args) == 1
+        and not value.keywords
+        and _same(value.args[0], bound)
+    )
+
+
+def _clamp_compares(tree: ast.Module) -> set[int]:
+    """ids of Compare nodes where swapping < and <= cannot change behaviour.
+
+    ``if x < c: x = c`` and ``if x < c: return c`` followed by ``return x`` act
+    the same at ``x == c``, so the ROR mutant is equivalent.
+    """
+    found: set[int] = set()
+    for parent in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            stmts = getattr(parent, field, None)
+            if not isinstance(stmts, list):
+                continue
+            for i, stmt in enumerate(stmts):
+                if not isinstance(stmt, ast.If) or stmt.orelse or len(stmt.body) != 1:
+                    continue
+                test = stmt.test
+                if not (
+                    isinstance(test, ast.Compare)
+                    and len(test.ops) == 1
+                    and isinstance(test.ops[0], _CLAMP_OPS)
+                    and isinstance(test.left, ast.Name)
+                ):
+                    continue
+                var, bound = test.left, test.comparators[0]
+                inner = stmt.body[0]
+                if (
+                    isinstance(inner, ast.Assign)
+                    and len(inner.targets) == 1
+                    and _same(inner.targets[0], var)
+                    and _same_value(inner.value, bound)
+                ) or (
+                    isinstance(inner, ast.Return)
+                    and inner.value is not None
+                    and _same_value(inner.value, bound)
+                    and i + 1 < len(stmts)
+                    and isinstance(stmts[i + 1], ast.Return)
+                    and stmts[i + 1].value is not None
+                    and _same(stmts[i + 1].value, var)
+                ):
+                    found.add(id(test))
+    return found
+
+
+def _dead_assigns(tree: ast.Module) -> set[int]:
+    """ids of Assign/AugAssign statements inside functions whose target is never read.
+
+    Deleting such a statement cannot change behaviour, so the SBR mutant is equivalent.
+    """
+    dead: set[int] = set()
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        reads: set[str] = set()
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                reads.add(node.id)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                reads.update(node.names)
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+            elif isinstance(node, ast.AugAssign):
+                target = node.target
+            else:
+                continue
+            if isinstance(target, ast.Name) and target.id not in reads:
+                dead.add(id(node))
+    return dead
+
+
+def _formats_only(node: ast.AST) -> bool:
+    """A ``"...".format(...)`` call or ``"..." % ...``: its operands only shape a message."""
+    if isinstance(node, ast.Call):
+        return isinstance(node.func, ast.Attribute) and node.func.attr == "format"
+    return (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Mod)
+        and isinstance(node.left, ast.Constant)
+        and isinstance(node.left.value, str)
+    )
+
+
 def _collect(tree: ast.Module, lines: set[int]) -> dict[int, tuple[str, int]]:
     """Map line -> (operator, walk index of the node) for the best candidate."""
     index = {id(n): i for i, n in enumerate(ast.walk(tree))}
     best: dict[int, tuple[str, int]] = {}
+    clamps = _clamp_compares(tree)
+    dead = _dead_assigns(tree)
 
     def visit(node: ast.AST, in_message: bool) -> None:
         if isinstance(node, ast.stmt) and is_arid(node):
             return
         if _is_all_assign(node):
             return
-        # Strings inside raise / f-strings are messages: mutating them teaches nothing.
+        # Strings inside raise / f-strings / format calls are messages: mutating them
+        # teaches nothing.
         in_message = in_message or isinstance(node, (ast.Raise, ast.JoinedStr))
+        in_message = in_message or _formats_only(node)
         line = getattr(node, "lineno", None)
         if line in lines:
             for op in _operators(node):
-                if (
-                    op == "CRP"
-                    and in_message
-                    and isinstance(node, ast.Constant)
-                    and isinstance(node.value, str)
-                ):
+                if op == "CRP" and in_message and isinstance(node, ast.Constant):
+                    continue
+                if op == "ROR" and id(node) in clamps:
+                    continue
+                if op == "AOR" and isinstance(node, ast.BinOp) and _formats_only(node):
+                    continue
+                if op == "SBR" and id(node) in dead:
                     continue
                 current = best.get(line)
                 if current is None or _PRIORITY.index(op) < _PRIORITY.index(current[0]):

@@ -43,6 +43,7 @@ GATE_OPTIONS: dict[str, dict[str, str]] = {
         "max_mutants": "mutation_max_mutants",
         "max_shown": "mutation_max_shown",
         "timeout_s": "mutation_timeout_s",
+        "auto_useless_blocks": "mutation_auto_useless_blocks",
     },
 }
 
@@ -173,6 +174,8 @@ def _validate(cfg: ProjectConfig) -> None:
         value = getattr(cfg, fld)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise GateError(f"{CONFIG_FILE}: {fld} must be an integer >= 1, got {value!r}")
+    if not isinstance(cfg.mutation_auto_useless_blocks, bool):
+        raise GateError(f"{CONFIG_FILE}: gates.mutation.auto_useless_blocks must be true or false")
     if not isinstance(cfg.hidden_required, bool):
         raise GateError(f"{CONFIG_FILE}: gates.hidden.required must be true or false")
     if not isinstance(cfg.network, bool):

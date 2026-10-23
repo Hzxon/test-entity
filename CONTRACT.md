@@ -78,7 +78,7 @@ gates:
   tests: {enabled: true, repeats: 5}
   hidden: {enabled: true, required: true}
   coverage: {enabled: true, min_total: 0.0, min_changed: 0.9}
-  mutation: {enabled: true, min_score: 0.8, max_mutants: 50, max_shown: 7, timeout_s: 60}
+  mutation: {enabled: true, min_score: 0.8, max_mutants: 50, max_shown: 7, timeout_s: 60, auto_useless_blocks: false}
 sandbox:
   network: false
   timeout_s: 600
@@ -229,7 +229,13 @@ Gate semantics:
 - **hidden** — `ctx.hidden_dir` None -> FAIL "no hidden tests" when `hidden_required` else SKIP. Sandbox with package + hidden only. One run with the seed. Public: `passed`, `failed`, `errors` counts only; summary like "hidden: 7 passed, 2 failed". Private: full output. FAIL on any failure/error or zero tests.
 - **coverage** — sandbox with golden + auto + hidden (whichever exist). `run_coverage`. Store `ctx.shared["coverage"] = CoverageData`. Compute total and, when `ctx.changed` non-empty, changed-line coverage = covered changed stmt lines / changed stmt lines (only lines that are statements count). Below `coverage_min_total` or `coverage_min_changed` -> FAIL. Public: `total`, `changed`, `uncovered_changed: [file:line...]` capped at 20 per file.
 - **mutation** — needs `ctx.shared["coverage"]` (run the coverage gate's logic inline if absent). Candidate lines per file = changed lines ∩ covered lines (if `ctx.changed` empty: all covered lines in the package). Read each file from the working tree, `generate_mutants`. For each mutant: sandbox with package + golden + hidden (NOT auto — auto tests are the author's and do not count as kills; this is the ACH rule), `overrides={path: mutant.source}`, `run_pytest(..., extra_args=["-x"])`, timeout `mutation_timeout_s`. killed = not run.ok (a timeout counts as killed). Score = killed / total. No mutants -> SKIP "no eligible lines". Score < `mutation_min_score` -> FAIL. Public: `generated`, `killed`, `score`, `survivors: [{id, line, operator}]` capped at `mutation_max_shown` per file (never `before`/`after` text, which would reveal the oracle? — `before`/`after` ARE allowed, they describe the author's own code). Private: every mutant with its run output.
-  - Additionally compute `auto_useless: [test ids]`? Out of scope for v1; leave a TODO comment.
+  - **ACH rule (auto test usefulness).** After scoring, for each `test_*.py` file in `auto` (when the dir
+    exists and at least one mutant survived golden + hidden), run every surviving mutant against that one
+    file only (`run_pytest(sb, [], ..., extra_args=["tests/auto/<file>", "-x"])`). A file that kills none of
+    them is useless: the author's tests add no detection power beyond the protected suite. Public:
+    `auto_checked` (file count), `auto_useless: [file names]`. Private: per file, the mutant ids it killed.
+    Any useless file -> WARN, or FAIL when `mutation_auto_useless_blocks`. A score FAIL still wins.
+    When no mutant survived, auto files cannot be credited and the check is skipped (`auto_checked: 0`).
 
 - Allowed imports: `core`, `gitinfo`, `sandbox`, `runner`, `mutator`.
 

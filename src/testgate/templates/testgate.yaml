@@ -47,6 +47,7 @@ gates:
     max_mutants: 50  # sampled with the seed when more lines are eligible
     max_shown: 7  # surviving mutants listed per file
     timeout_s: 60  # per mutant run; a timeout counts as killed
+    auto_useless_blocks: false  # true: FAIL when an auto test file kills no mutant golden+hidden missed
 
 sandbox:
   network: false  # block sockets inside test runs

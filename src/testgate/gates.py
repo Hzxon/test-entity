@@ -20,6 +20,7 @@ from testgate.core import (
     CoverageData,
     GateError,
     GateResult,
+    Mutant,
     RunContext,
     Status,
     TestRun,
@@ -353,6 +354,40 @@ def _candidate_lines(ctx: RunContext, data: CoverageData) -> dict[str, set[int]]
     return out
 
 
+def _auto_usefulness(
+    ctx: RunContext, survivors: list[Mutant]
+) -> tuple[list[str], list[str], dict[str, list[str]]]:
+    """ACH rule: an auto test file is useful only if it kills a mutant golden + hidden missed.
+
+    Returns (checked files, useless files, {file: killed mutant ids}).
+    """
+    cfg = ctx.config
+    auto = _test_dirs(ctx, ("auto",))
+    if not auto or not survivors:
+        return [], [], {}
+    files = sorted(p.name for p in auto["auto"].glob("test_*.py"))
+    killed_by: dict[str, list[str]] = {}
+    for name in files:
+        killed_by[name] = []
+        for m in survivors:
+            sb = sandbox.build_sandbox(cfg, ctx.python, auto, overrides={m.path: m.source})
+            try:
+                run = runner.run_pytest(
+                    sb,
+                    [],
+                    cfg.mutation_timeout_s,
+                    ctx.seed,
+                    extra_args=[f"tests/auto/{name}", "-x"],
+                )
+            finally:
+                sandbox.destroy(sb)
+            ctx.log(f"auto {name} vs {m.id}: exit={run.exit_code}\n{run.output}")
+            if not run.ok:
+                killed_by[name].append(m.id)
+    useless = [name for name in files if not killed_by[name]]
+    return files, useless, killed_by
+
+
 def gate_mutation(ctx: RunContext) -> GateResult:
     cfg = ctx.config
     data: CoverageData | None = ctx.shared.get("coverage")
@@ -374,7 +409,6 @@ def gate_mutation(ctx: RunContext) -> GateResult:
     if not mutants:
         return _skip("mutation", "no eligible lines")
 
-    # TODO(v2): per-auto-test usefulness (ACH rule)
     # Kills are judged by golden + hidden only; auto tests are the author's.
     dirs = _test_dirs(ctx, ("golden", "hidden"))
     if not dirs:
@@ -417,13 +451,19 @@ def gate_mutation(ctx: RunContext) -> GateResult:
                     "after": m.after,
                 }
             )
+    auto_checked, auto_useless, auto_kills = _auto_usefulness(
+        ctx, [m for m in mutants if not m.killed]
+    )
     public = {
         "generated": len(mutants),
         "killed": killed,
         "score": round(score, 4),
         "survivors": survivors,
+        "auto_checked": len(auto_checked),
+        "auto_useless": auto_useless,
     }
     private = {
+        "auto_kills": auto_kills,
         "mutants": [
             {
                 "id": m.id,
@@ -433,7 +473,7 @@ def gate_mutation(ctx: RunContext) -> GateResult:
                 "output": m.run.output if m.run else "",
             }
             for m in mutants
-        ]
+        ],
     }
     summary = f"mutation: {killed}/{len(mutants)} killed (score {score:.2f})"
     if score < cfg.mutation_min_score:
@@ -444,6 +484,10 @@ def gate_mutation(ctx: RunContext) -> GateResult:
             public,
             private,
         )
+    if auto_useless:
+        summary += f"; {len(auto_useless)} auto test file(s) kill nothing golden+hidden missed"
+        status = Status.FAIL if cfg.mutation_auto_useless_blocks else Status.WARN
+        return _result("mutation", status, summary, public, private)
     return _result("mutation", Status.PASS, summary, public, private)
 
 

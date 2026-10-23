@@ -60,13 +60,22 @@ Hidden tests live outside the repo. The path comes from `hidden:` in `testgate.y
 
 The action uploads `testgate-private.log` as the `testgate-private` artifact and sets the `verdict` output.
 
+## Languages
+
+| language | tests | property tests | coverage | mutation | build check |
+|---|---|---|---|---|---|
+| `python` (default) | pytest in a fresh root, `--noconftest` | Hypothesis with `--hypothesis-seed` | coverage.py | AST mutator, one mutant per changed covered line | `import <pkg>` + `compileall` |
+| `js` | vitest, JSON reporter, positional test filters | fast-check seeded through `TESTGATE_FC_SEED` | `@vitest/coverage-v8` | textual mutator, `node --check` per mutant | `node --check` per source file |
+
+JS sandboxes symlink the project's `node_modules`, copy `package.json`, and block the network with a `--require` preload (`localhost` DNS stays allowed so vitest can start). Hidden tests import sources as if they lived in `tests/hidden/` of the project.
+
 ## Limits
 
-- Python only in v1.
+- Languages: Python (pytest, Hypothesis, AST mutator) and JavaScript/TypeScript (vitest, fast-check, a line-based textual mutator; `node --check` validates each mutant, `.ts` sources are not syntax-checked). Set `language: js` in `testgate.yaml`; the project must have run `npm ci` before the gate runs, and needs `vitest` and `@vitest/coverage-v8` in devDependencies.
 - Mutation testing runs golden + hidden once per mutant. Runs are parallel (`mutation.jobs`, default half the CPUs); use `max_mutants` and `timeout_s` to bound large changes.
 - Baseline coverage comparison needs a base ref; `--no-git` runs only check the fixed thresholds. Changed-line coverage is checked against a fixed threshold.
 - The sandbox is a subprocess with a scrubbed environment and blocked sockets. It is not a container.
-- Equivalent mutants are reduced by rules (clamps, message-only constants, dead assignments), not detected in general. A survivor can still be equivalent; read the `before`/`after` text before adding a test.
+- Equivalent mutants are reduced by rules (Python: clamps, message-only constants, dead assignments; JS: message-only strings in throw/format/bare calls), not detected in general. A survivor can still be equivalent; read the `before`/`after` text before adding a test.
 
 ## Credits
 

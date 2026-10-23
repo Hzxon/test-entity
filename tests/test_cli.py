@@ -37,6 +37,28 @@ def test_init_writes_files_and_next_steps(
     assert '"testgate" required check' in out
 
 
+def test_init_language_js(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from testgate.config import load_config
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "--language", "js"]) == 0
+    cfg = load_config(tmp_path, None)
+    assert (cfg.language, cfg.package, cfg.import_name) == ("js", "src", "index.js")
+    assert "\nlanguage: js\n" in (tmp_path / "testgate.yaml").read_text()
+    example = (tmp_path / "tests/golden/example.test.js").read_text()
+    assert "../../src/index.js" in example
+    assert "fast-check" in example
+    assert not (tmp_path / "tests/golden/test_example.py").exists()
+
+
+def test_init_python_config_keeps_language_commented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["init"]) == 0
+    assert "# language: python" in (tmp_path / "testgate.yaml").read_text()
+
+
 def test_init_refuses_overwrite_then_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "testgate.yaml").write_text("mine\n")

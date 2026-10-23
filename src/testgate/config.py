@@ -19,6 +19,7 @@ CONFIG_FILE = "testgate.yaml"
 
 TOP_KEYS = {
     "version",
+    "language",
     "package",
     "import_name",
     "tests",
@@ -27,6 +28,7 @@ TOP_KEYS = {
     "gates",
     "sandbox",
 }
+LANGUAGES = ("python", "js")
 TESTS_KEYS = {"golden", "auto", "hidden", "hidden_env"}
 SANDBOX_KEYS = {"network", "timeout_s", "python"}
 
@@ -119,8 +121,12 @@ def load_config(root: Path, base_ref: str | None) -> ProjectConfig:
         raise GateError(f"{CONFIG_FILE}: missing required key: package")
     if "import_name" not in data:
         raise GateError(f"{CONFIG_FILE}: missing required key: import_name")
+    language = data.get("language", "python")
+    if language not in LANGUAGES:
+        raise GateError(f"{CONFIG_FILE}: language must be one of {', '.join(LANGUAGES)}")
     cfg = ProjectConfig(
         root=root,
+        language=language,
         package=_string("package", data["package"]),
         import_name=_string("import_name", data["import_name"]),
     )

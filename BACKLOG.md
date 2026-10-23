@@ -56,6 +56,9 @@ Verified on GitHub (2026-10-23, tag `v0` at ac5b38c):
   showed the honest example PASS and the cheat example FAIL on hidden tests,
   PR #13 showed that editing a protected golden test fails `protected`.
 - `--root` may be a subdirectory of the repository (monorepo layout).
+- Language adapters behind `core.Language` (`src/testgate/languages/`):
+  `python` and `js` (vitest, fast-check, textual mutator). `examples/discount-js`
+  and `discount-js-cheat` mirror the Python pair and give the same verdicts.
 - testgate gates its own repo: `testgate.yaml` at the root, frozen tests in
   `tests/golden`, hidden tests in the private repo `Hzxon/testgate-hidden`
   (read-only deploy key, secret `TESTGATE_HIDDEN_SSH_KEY`), workflow
@@ -68,7 +71,7 @@ Not verified:
   but nobody checked the built artifact.
 
 Known limits (documented in README.md):
-- Python only.
+- Python and JavaScript/TypeScript (vitest). No other runtimes.
 - Equivalent mutants are reduced by rules (clamps, message-only constants,
   dead assignments); there is no general equivalence detection.
 - Sandbox is subprocess-based with a socket block, not a container.
@@ -105,7 +108,7 @@ no direct pushes (ruleset `main: PR + green checks`, added 2026-10-23).
 | 4 | ~~[Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4)~~ done | v0.1 |
 | 5 | ~~[Run mutants in parallel](https://github.com/Hzxon/test-entity/issues/5)~~ done | v0.1 |
 | 6 | ~~[Run testgate on itself](https://github.com/Hzxon/test-entity/issues/6)~~ done | v0.1 |
-| 7 | [JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7) | v1 |
+| 7 | ~~[JS/TS adapter (vitest, fast-check, Stryker)](https://github.com/Hzxon/test-entity/issues/7)~~ done | v1 |
 | 8 | [HTTP black-box mode](https://github.com/Hzxon/test-entity/issues/8) | v1 |
 
 ## Decisions taken

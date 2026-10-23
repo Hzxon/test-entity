@@ -322,3 +322,86 @@ Expected: `discount` -> verdict PASS (mutation score may show survivors; min_sco
 - pytest, files under `tests/`, named `test_<module>.py`.
 - No test may touch the network or the real git repo of testgate; create temp git repos with `git init` in `tmp_path`.
 - Every public claim in this contract that is checkable gets one focused test.
+
+## Language adapters (issue #7)
+
+The gates do not know a language. Everything language-specific sits behind
+`core.Language`, chosen by `language:` in `testgate.yaml` (`python`, the
+default, or `js`). `ctx.language` holds the adapter instance; gates never
+import `runner`, `mutator` or language modules directly.
+
+```python
+class Language(Protocol):                       # in core.py; no sibling imports
+    name: str                                   # "python" | "js"
+    source_suffixes: tuple[str, ...]            # (".py",) | (".js", ".mjs", ".cjs", ".ts")
+    test_glob: str                              # "test_*.py" | "*.test.*"   (auto files + hygiene)
+    detection_tokens: tuple[str, ...]           # extra hygiene tokens for this language
+    def package_dest(self, cfg: ProjectConfig) -> str
+        # where cfg.package is copied inside the sandbox, relative to its root:
+        # python -> f"src/{cfg.import_name}"; js -> cfg.package (layout preserved so relative imports work)
+    def prepare_sandbox(self, sb: Sandbox, cfg: ProjectConfig, project_root: Path) -> None
+        # python: write pytest.ini (+ sitecustomize.py when not sb.network), PYTHONPATH already set
+        # js: symlink project_root/node_modules -> sb.root/node_modules (GateError "run npm ci" if absent),
+        #     copy project_root/package.json, write vitest.config.mjs (setupFiles: fc-seed.mjs; include tests/**),
+        #     fc-seed.mjs (fast-check configureGlobal({seed}) if fast-check imports), and when not sb.network
+        #     no-net.cjs + env NODE_OPTIONS="--require <root>/no-net.cjs" (patch net.Socket.prototype.connect,
+        #     dns.lookup, http/https.request, globalThis.fetch to throw "testgate: network disabled").
+        # project_root is the real project (the baseline sandbox is built from an archive without node_modules).
+    def auto_file_ok(self, path: Path) -> bool
+        # python: name matches test_*.py or __init__.py; js: *.test.js|mjs|ts (no vitest.config.*, no setup files)
+    def build(self, sb: Sandbox, cfg: ProjectConfig, timeout_s: int) -> subprocess.CompletedProcess[str]
+        # python: python -c "import <import_name>" then compileall -q src
+        # js: node --check on every .js/.mjs/.cjs under the package dir (ts files skipped), first failure returned
+    def run_tests(self, sb: Sandbox, names: list[str], timeout_s: int, seed: str,
+                  files: list[str] | None = None, fail_fast: bool = False) -> TestRun
+        # names: sandbox test dirs ("golden", "auto", "hidden"); files: restrict to these paths relative to sb.root
+        # python: pytest -q --tb=short -rA [tests/<name>...|files] [--hypothesis-seed=<seed>] [-x]
+        # js: node_modules/.bin/vitest run --root <root> --reporter=json --outputFile=<root>/vitest.json
+        #     --dir tests/<name> (one dir) or the file paths; [--bail=1]; env TESTGATE_FC_SEED=<int from seed>
+        #     counts from vitest.json numPassedTests/numFailedTests; exit code != 0 or zero tests -> not ok
+    def run_coverage(self, sb: Sandbox, names: list[str], timeout_s: int, seed: str,
+                     repo_package: str) -> tuple[TestRun, CoverageData]
+        # python: coverage run --source=src -m pytest ...; coverage json
+        # js: vitest run ... --coverage.enabled --coverage.provider=v8 --coverage.reporter=json
+        #     --coverage.reportsDirectory=<root>/cov --coverage.include=<package_dest>/**
+        #     parse cov/coverage-final.json (istanbul): statements = statementMap start lines, covered = s[id] > 0
+        #     map <root>/<package_dest>/x -> <repo_package>/x. Missing @vitest/coverage-v8 -> GateError naming it.
+    def generate_mutants(self, path: str, source: str, lines: set[int], seed: str, max_mutants: int) -> list[Mutant]
+        # python: mutator.generate_mutants
+        # js: line-based textual mutator (see below)
+```
+
+- `ProjectConfig.language: str = "python"`; `config.py` validates it is "python" or "js". `ProjectConfig.python`
+  stays Python-only. `RunContext.language: Any` (the adapter; typed Any in core to avoid a cycle).
+- `src/testgate/languages/__init__.py` exposes `get_language(name) -> Language`; `python.py` and `js.py` implement it.
+- `sandbox.build_sandbox(cfg, python, tests, overrides, dest=...)`: copies `cfg.package` to `<root>/<dest>` where
+  dest = `language.package_dest(cfg)`; overrides map `<cfg.package>/x` -> `<root>/<dest>/x`. It writes no
+  language files any more; gates call `language.prepare_sandbox` right after. The `python` field stays.
+- Gates: every `runner.run_pytest` -> `ctx.language.run_tests`, `runner.run_coverage` -> `ctx.language.run_coverage`,
+  `mutator.generate_mutants` -> `ctx.language.generate_mutants`, build gate -> `ctx.language.build`. The ACH per-file
+  run passes `files=[f"tests/auto/{name}"]`, mutant runs pass `fail_fast=True`. Hygiene uses `source_suffixes`,
+  `test_glob`, `auto_file_ok` and `detection_tokens`; auto files are `sorted(auto.glob(test_glob))`.
+- `cli.py`: `ctx.language = get_language(cfg.language)`; `init --language js` writes `package: src`,
+  `import_name: index.js`, `language: js`, and a `tests/golden/example.test.js` template; the Python template is unchanged.
+- `runner.py` and `mutator.py` keep their public functions (used by `languages/python.py` and the existing tests).
+
+JS textual mutator (one mutant per line, first match on the line wins, same operator names):
+- Skip lines that are blank, comments (`//`, `/*`, `*`), `import`/`export ... from`, or contain `console.`,
+  `logger.`, `debug(`, `.log(`; skip CRP inside `throw ...(` and template literals.
+- ROR `<=`->`<`, `<`->`<=`, `>=`->`>`, `>`->`>=`, `===`->`!==`, `!==`->`===`, `==`->`!=`, `!=`->`==`
+- AOR `+`->`-`, `-`->`+`, `*`->`/`, `/`->`*`, `%`->`*` (binary, spaces around; not `++`/`--`/`+=`/`=>`/`**`)
+- LCR `&&`->`||`, `||`->`&&`
+- UOI `if (!x` -> `if (x`; else `if (cond)` -> `if (!(cond))`
+- CRP `true`<->`false`, integer literal n -> n+1, non-empty string literal -> `""`
+- RVR `return <expr>;` -> `return undefined;`
+- SBR a statement line ending in `;` that is an assignment or call -> `;`
+- Verify each mutant with `node --check` (as .mjs when package.json has "type": "module"); drop it if it fails.
+- Equivalence rules from issue #4 are Python-only for now; document that in README limits.
+
+Examples: `examples/discount-js`, `examples/discount-js-cheat`, `examples/discount-js-hidden`, same rules as the
+Python pair in integer cents: `finalPrice(subtotalCents, couponCents = 0)`: 10% off at >= 10000, coupon after,
+floor 0, round half up to a cent, RangeError on negatives. `package.json` (type module; devDependencies vitest,
+@vitest/coverage-v8, fast-check; committed `package-lock.json`), `testgate.yaml` with `language: js`,
+`package: src`, `import_name: discount.js`, `hidden: ../discount-js-hidden`. Hidden tests import
+`../../src/discount.js` (they run from `tests/hidden/` in the sandbox). `node_modules/` is git-ignored; CI and the
+e2e tests run `npm ci` in both example dirs first, and the e2e tests skip when `node` is missing.

@@ -8,3 +8,5 @@ __pycache__/
 dist/
 testgate.json
 testgate-private.log
+node_modules/
+examples/**/coverage/

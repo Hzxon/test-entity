@@ -6,42 +6,9 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
-from testgate.core import ProjectConfig
-
-_SITECUSTOMIZE = """\
-import socket
-
-_real_socket = socket.socket
-
-
-# A subclass, not a function: ssl and others subclass socket.socket at import time.
-class _BlockedSocket(_real_socket):
-    def __init__(self, *args, **kwargs):
-        raise OSError("testgate: network disabled")
-
-
-def _blocked_connection(*args, **kwargs):
-    raise OSError("testgate: network disabled")
-
-
-socket.socket = _BlockedSocket
-socket.create_connection = _blocked_connection
-"""
-
-_PYTEST_INI = "[pytest]\naddopts = -p no:cacheprovider --noconftest\ntestpaths = tests\n"
-
-
-@dataclass
-class Sandbox:
-    root: Path  # temp dir
-    src_root: Path  # <root>/src, package copied under here
-    test_dirs: dict[str, Path]  # name -> <root>/tests/<name>
-    python: str
-    env: dict[str, str]
-    network: bool
+from testgate.core import ProjectConfig, Sandbox
 
 
 def _ignore_tests(_dir: str, names: list[str]) -> set[str]:
@@ -61,11 +28,13 @@ def build_sandbox(
     python: str,
     tests: dict[str, Path],
     overrides: dict[str, str] | None = None,
+    dest: str | None = None,
 ) -> Sandbox:
-    root = Path(tempfile.mkdtemp(prefix="testgate-"))
-    src_root = root / "src"
-    pkg_dst = src_root / config.import_name
-    shutil.copytree(config.root / config.package, pkg_dst, ignore=_ignore_package)
+    # resolve(): macOS puts temp dirs behind the /var -> /private/var symlink, and tools that
+    # realpath imported files (vitest coverage) would otherwise miss the include glob.
+    root = Path(tempfile.mkdtemp(prefix="testgate-")).resolve()
+    src_root = root / (dest if dest is not None else f"src/{config.import_name}")
+    shutil.copytree(config.root / config.package, src_root, ignore=_ignore_package)
 
     test_dirs: dict[str, Path] = {}
     for name, src in tests.items():
@@ -74,9 +43,9 @@ def build_sandbox(
         test_dirs[name] = dst
 
     for rel_path, text in (overrides or {}).items():
-        # "<config.package>/x.py" -> "<root>/src/<import_name>/x.py"
+        # "<config.package>/x.py" -> "<root>/<dest>/x.py"
         rel = Path(rel_path).relative_to(config.package)
-        target = pkg_dst / rel
+        target = src_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
 
@@ -85,17 +54,13 @@ def build_sandbox(
     env = {
         "PATH": os.environ.get("PATH", os.defpath),
         "HOME": str(root),
-        "PYTHONPATH": f"{root}:{src_root}",
+        "PYTHONPATH": f"{root}:{root / 'src'}",
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONHASHSEED": "0",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "TMPDIR": str(tmp),
     }
-
-    (root / "pytest.ini").write_text(_PYTEST_INI, encoding="utf-8")
-    if not config.network:
-        (root / "sitecustomize.py").write_text(_SITECUSTOMIZE, encoding="utf-8")
 
     return Sandbox(
         root=root,

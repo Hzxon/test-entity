@@ -10,9 +10,10 @@ from importlib import resources
 from pathlib import Path
 
 from testgate import config as config_mod
-from testgate import gitinfo, mutator
+from testgate import gitinfo
 from testgate.core import GateError, RunContext, Status
 from testgate.gates import GATE_ORDER, run_gates
+from testgate.languages import get_language
 from testgate.report import build_report, to_markdown, write_outputs
 
 NEXT_STEPS = """\
@@ -29,7 +30,11 @@ def _template(name: str) -> str:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
-    if args.package:
+    js = args.language == "js"
+    if js:
+        package = args.package or "src"
+        import_name = args.import_name or "index.js"
+    elif args.package:
         package = args.package
         import_name = args.import_name or Path(package.rstrip("/")).name
     else:
@@ -42,10 +47,17 @@ def _cmd_init(args: argparse.Namespace) -> int:
             text = text.replace(key, value)
         return text
 
+    config_text = render(_template("testgate.yaml"))
+    if js:
+        config_text = config_text.replace("# language: python", "language: js")
+        example = ("tests/golden/example.test.js", _template("example.test.js"))
+    else:
+        example = ("tests/golden/test_example.py", render(_template("test_example.py")))
+
     root = Path.cwd()
     targets = [
-        (root / "testgate.yaml", render(_template("testgate.yaml"))),
-        (root / "tests/golden/test_example.py", render(_template("test_example.py"))),
+        (root / "testgate.yaml", config_text),
+        (root / example[0], example[1]),
         (root / "tests/auto/.gitkeep", ""),
         (root / ".github/workflows/testgate.yml", _template("testgate.yml")),
     ]
@@ -112,6 +124,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed=seed,
         seed_is_secret=bool(env_seed),
         python=python,
+        language=get_language(cfg.language),
     )
     results = run_gates(ctx, only)
     report = build_report(ctx, results)
@@ -133,6 +146,7 @@ def _cmd_mutants(args: argparse.Namespace) -> int:
     root = Path(args.root or Path.cwd()).resolve()
     no_git, base_ref = _resolve_base(root, args)
     cfg = config_mod.load_config(root, base_ref)
+    language = get_language(cfg.language)
     limit = args.max if args.max is not None else cfg.mutation_max_mutants
     package = cfg.package.strip("/")
     prefix = "" if package in ("", ".") else package + "/"
@@ -140,8 +154,13 @@ def _cmd_mutants(args: argparse.Namespace) -> int:
     lines_by_path: dict[str, set[int]] = {}
     if no_git or base_ref is None:
         base = root / package
-        for file in sorted(base.rglob("*.py")) if base.is_dir() else []:
-            if "__pycache__" in file.parts:
+        for file in sorted(base.rglob("*")) if base.is_dir() else []:
+            if (
+                not file.is_file()
+                or file.suffix not in language.source_suffixes
+                or "__pycache__" in file.parts
+                or "node_modules" in file.parts
+            ):
                 continue
             count = len(file.read_text(encoding="utf-8").splitlines())
             lines_by_path[file.relative_to(root).as_posix()] = set(range(1, count + 1))
@@ -153,7 +172,7 @@ def _cmd_mutants(args: argparse.Namespace) -> int:
     total = 0
     for path, lines in sorted(lines_by_path.items()):
         source = (root / path).read_text(encoding="utf-8")
-        for m in mutator.generate_mutants(path, source, lines, "mutants", limit):
+        for m in language.generate_mutants(path, source, lines, "mutants", limit):
             print(f"{m.id}  {m.operator}  {m.before} -> {m.after}")
             total += 1
     print(f"{total} mutant(s)", file=sys.stderr)
@@ -169,6 +188,9 @@ def _parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="write testgate.yaml, example tests and the workflow")
     init.add_argument("--package", help="source directory, e.g. src/mypkg")
     init.add_argument("--import-name", help="top-level module name")
+    init.add_argument(
+        "--language", choices=["python", "js"], default="python", help="project language"
+    )
     init.add_argument("--force", action="store_true", help="overwrite existing files")
 
     run = sub.add_parser("run", help="run the gates and print the verdict")

@@ -2,6 +2,9 @@
 # origin/main), so a change cannot loosen the gates it is judged by.
 version: 1  # schema version; only 1 exists
 
+# Language adapter: python (default) or js.
+# language: python
+
 # Source directory copied into the sandbox, relative to the repo root.
 package: __PACKAGE__
 # Top-level module the build gate imports.

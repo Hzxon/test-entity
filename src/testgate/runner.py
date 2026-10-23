@@ -8,8 +8,8 @@ import re
 import time
 from pathlib import Path, PurePosixPath
 
-from testgate.core import CoverageData, TestRun
-from testgate.sandbox import Sandbox, run_in_sandbox
+from testgate.core import CoverageData, Sandbox, TestRun
+from testgate.sandbox import run_in_sandbox
 
 # Result of the "is hypothesis importable" probe, keyed by sandbox root.
 _HYPOTHESIS: dict[str, bool] = {}
@@ -26,9 +26,14 @@ def _has_hypothesis(sb: Sandbox) -> bool:
 
 
 def _pytest_args(
-    sb: Sandbox, test_names: list[str], seed: str | None, extra: list[str] | None
+    sb: Sandbox,
+    test_names: list[str],
+    seed: str | None,
+    extra: list[str] | None,
+    files: list[str] | None = None,
 ) -> list[str]:
-    args = ["-m", "pytest", "-q", "--tb=short", "-rA", *[f"tests/{n}" for n in test_names]]
+    paths = files if files else [f"tests/{n}" for n in test_names]
+    args = ["-m", "pytest", "-q", "--tb=short", "-rA", *paths]
     if seed and _has_hypothesis(sb):
         args.append(f"--hypothesis-seed={seed}")
     args.extend(extra or [])
@@ -64,8 +69,9 @@ def run_pytest(
     timeout_s: int,
     seed: str | None,
     extra_args: list[str] | None = None,
+    files: list[str] | None = None,
 ) -> TestRun:
-    argv = [sb.python, *_pytest_args(sb, test_names, seed, extra_args)]
+    argv = [sb.python, *_pytest_args(sb, test_names, seed, extra_args, files)]
     start = time.monotonic()
     proc = run_in_sandbox(sb, argv, timeout_s)
     return _make_run(proc.returncode, proc.stdout + proc.stderr, time.monotonic() - start)
@@ -81,7 +87,8 @@ def run_coverage(
 ) -> tuple[TestRun, CoverageData]:
     """Run pytest under coverage; return coverage keyed by repo-relative path.
 
-    `source_root` is unused: the sandbox layout already fixes where sources live.
+    `source_root` is unused: the sandbox layout already fixes where sources live
+    (``<root>/src/<import_name>``, the Python adapter's package_dest).
     """
     rc = sb.root / ".coveragerc"
     rc.write_text(f"[run]\ndata_file = {sb.root / '.coverage'}\n", encoding="utf-8")
@@ -101,7 +108,7 @@ def run_coverage(
         return test_run, data
 
     files = json.loads(cov_json.read_text(encoding="utf-8")).get("files", {})
-    src_real = os.path.realpath(sb.src_root)
+    src_real = os.path.realpath(sb.root / "src")
     for name, info in files.items():
         full = name if os.path.isabs(name) else str(sb.root / name)
         rel = os.path.relpath(os.path.realpath(full), src_real)

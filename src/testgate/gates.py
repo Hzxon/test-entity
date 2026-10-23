@@ -18,14 +18,16 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from testgate import gitinfo, mutator, runner, sandbox
+from testgate import gitinfo, sandbox
 from testgate.core import (
     ChangedFile,
     CoverageData,
     GateError,
     GateResult,
     Mutant,
+    ProjectConfig,
     RunContext,
+    Sandbox,
     Status,
     TestRun,
 )
@@ -33,17 +35,11 @@ from testgate.core import (
 GATE_ORDER = ["protected", "hygiene", "build", "tests", "hidden", "coverage", "mutation"]
 
 # Strings that mean code is trying to detect or steer the test harness.
+# Language-neutral; each Language adds its own via detection_tokens.
 FORBIDDEN_TOKENS = [
-    "PYTEST_CURRENT_TEST",
     "TESTGATE",
-    "HYPOTHESIS_SEED",
     "tests/hidden",
     "hidden_dir",
-    'sys.modules["pytest"]',
-    "sys.modules['pytest']",
-    "monkeypatch.setattr(pytest",
-    'os.environ.get("CI"',
-    "os.environ.get('CI'",
 ]
 _IMPORT_TESTS = re.compile(r"^\s*(?:from\s+tests\b|import\s+tests\b)")
 _IMPORT_GOLDEN_HIDDEN = re.compile(
@@ -97,13 +93,39 @@ def _collected(run: TestRun) -> int:
     return run.passed + run.failed + run.errors
 
 
-def _py_files(root: Path, rel: str) -> list[Path]:
+def _source_files(root: Path, rel: str, suffixes: tuple[str, ...]) -> list[Path]:
     base = root / rel
     if base.is_file():
-        return [base] if base.suffix == ".py" else []
+        return [base] if base.suffix in suffixes else []
     if not base.is_dir():
         return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return sorted(
+        p
+        for p in base.rglob("*")
+        if p.is_file()
+        and p.suffix in suffixes
+        and "__pycache__" not in p.parts
+        and "node_modules" not in p.parts
+    )
+
+
+def _sandbox(
+    ctx: RunContext,
+    dirs: dict[str, Path],
+    overrides: dict[str, str] | None = None,
+    cfg: ProjectConfig | None = None,
+) -> Sandbox:
+    """Build a sandbox and let the language write its own files into it.
+
+    `cfg` is only given for the baseline run, whose copy of the package lives in
+    an archive dir; the language still gets the real project root.
+    """
+    cfg = cfg or ctx.config
+    sb = sandbox.build_sandbox(
+        cfg, ctx.python, dirs, overrides=overrides, dest=ctx.language.package_dest(cfg)
+    )
+    ctx.language.prepare_sandbox(sb, cfg, ctx.config.root)
+    return sb
 
 
 def _posix(root: Path, path: Path) -> str:
@@ -150,15 +172,15 @@ def gate_hygiene(ctx: RunContext) -> GateResult:
         loc = f"{file}:{line}" if line else file
         hits.append((file, f"{loc}: {reason}"))
 
-    auto_files = _py_files(root, cfg.auto)
+    lang = ctx.language
+    tokens = [*FORBIDDEN_TOKENS, *lang.detection_tokens]
+    auto_files = _source_files(root, cfg.auto, lang.source_suffixes)
     auto_set = set(auto_files)
     for path in auto_files:
-        if path.name != "__init__.py" and not (
-            path.name.startswith("test_") and path.name.endswith(".py")
-        ):
-            add(_posix(root, path), None, "only test_*.py and __init__.py are allowed in auto")
+        if not lang.auto_file_ok(path):
+            add(_posix(root, path), None, f"only {lang.test_glob} files are allowed in auto")
 
-    scanned = sorted({*auto_files, *_py_files(root, cfg.package)})
+    scanned = sorted({*auto_files, *_source_files(root, cfg.package, lang.source_suffixes)})
     for path in scanned:
         rel = _posix(root, path)
         try:
@@ -166,7 +188,7 @@ def gate_hygiene(ctx: RunContext) -> GateResult:
         except OSError:
             continue
         for no, text in enumerate(lines, 1):
-            for token in FORBIDDEN_TOKENS:
+            for token in tokens:
                 if token in text:
                     add(rel, no, f"forbidden reference {token}")
             if path not in auto_set and _IMPORT_TESTS.match(text):
@@ -191,24 +213,17 @@ def gate_hygiene(ctx: RunContext) -> GateResult:
 
 def gate_build(ctx: RunContext) -> GateResult:
     cfg = ctx.config
-    sb = sandbox.build_sandbox(cfg, ctx.python, {})
+    sb = _sandbox(ctx, {})
     try:
-        steps = [
-            [sb.python, "-c", f"import {cfg.import_name}"],
-            [sb.python, "-m", "compileall", "-q", "src"],
-        ]
-        outputs: list[str] = []
-        for argv in steps:
-            proc = sandbox.run_in_sandbox(sb, argv, cfg.timeout_s)
-            outputs.append(f"$ {' '.join(argv)}\n{proc.stdout}{proc.stderr}")
-            if proc.returncode != 0:
-                return _result(
-                    "build",
-                    Status.FAIL,
-                    f"build failed (exit {proc.returncode})",
-                    {"exit_code": proc.returncode},
-                    {"output": "\n".join(outputs)},
-                )
+        proc = ctx.language.build(sb, cfg, cfg.timeout_s)
+        if proc.returncode != 0:
+            return _result(
+                "build",
+                Status.FAIL,
+                f"build failed (exit {proc.returncode})",
+                {"exit_code": proc.returncode},
+                {"output": f"$ {' '.join(proc.args)}\n{proc.stdout}{proc.stderr}"},
+            )
         return _result("build", Status.PASS, "package imports and compiles")
     finally:
         sandbox.destroy(sb)
@@ -223,12 +238,12 @@ def gate_tests(ctx: RunContext) -> GateResult:
     if not dirs:
         return _result("tests", Status.FAIL, "no golden or auto tests found")
     names = list(dirs)
-    sb = sandbox.build_sandbox(cfg, ctx.python, dirs)
+    sb = _sandbox(ctx, dirs)
     outputs: list[str] = []
     first: TestRun | None = None
     try:
         for i in range(1, cfg.repeats + 1):
-            run = runner.run_pytest(sb, names, cfg.timeout_s, ctx.seed)
+            run = ctx.language.run_tests(sb, names, cfg.timeout_s, ctx.seed)
             outputs.append(f"--- run {i} (exit {run.exit_code}) ---\n{run.output}")
             if first is None:
                 first = run
@@ -266,9 +281,9 @@ def gate_hidden(ctx: RunContext) -> GateResult:
         if cfg.hidden_required:
             return _result("hidden", Status.FAIL, "no hidden tests")
         return _skip("hidden", "no hidden tests")
-    sb = sandbox.build_sandbox(cfg, ctx.python, dirs)
+    sb = _sandbox(ctx, dirs)
     try:
-        run = runner.run_pytest(sb, ["hidden"], cfg.timeout_s, ctx.seed)
+        run = ctx.language.run_tests(sb, ["hidden"], cfg.timeout_s, ctx.seed)
     finally:
         sandbox.destroy(sb)
     # counts only: names and assertion text stay in the private log
@@ -291,11 +306,9 @@ def _measure_coverage(ctx: RunContext) -> tuple[TestRun, CoverageData]:
     dirs = _test_dirs(ctx, ("golden", "auto", "hidden"))
     if not dirs:
         raise GateError("no tests available to measure coverage")
-    sb = sandbox.build_sandbox(cfg, ctx.python, dirs)
+    sb = _sandbox(ctx, dirs)
     try:
-        run, data = runner.run_coverage(
-            sb, list(dirs), cfg.timeout_s, ctx.seed, cfg.root, cfg.package
-        )
+        run, data = ctx.language.run_coverage(sb, list(dirs), cfg.timeout_s, ctx.seed, cfg.package)
     finally:
         sandbox.destroy(sb)
     ctx.shared["coverage"] = data
@@ -326,10 +339,10 @@ def _baseline_coverage(ctx: RunContext) -> tuple[CoverageData | None, str]:
             dirs["hidden"] = ctx.hidden_dir
         if not dirs:
             return None, "no tests at base ref"
-        sb = sandbox.build_sandbox(base_cfg, ctx.python, dirs)
+        sb = _sandbox(ctx, dirs, cfg=base_cfg)
         try:
-            run, data = runner.run_coverage(
-                sb, list(dirs), cfg.timeout_s, ctx.seed, tmp, cfg.package
+            run, data = ctx.language.run_coverage(
+                sb, list(dirs), cfg.timeout_s, ctx.seed, cfg.package
             )
         finally:
             sandbox.destroy(sb)
@@ -425,20 +438,21 @@ def _auto_usefulness(
     auto = _test_dirs(ctx, ("auto",))
     if not auto or not survivors:
         return [], [], {}
-    files = sorted(p.name for p in auto["auto"].glob("test_*.py"))
+    files = sorted(p.name for p in auto["auto"].glob(ctx.language.test_glob))
     killed_by: dict[str, list[str]] = {}
     pairs = [(name, m) for name in files for m in survivors]
 
     def check(pair: tuple[str, Mutant]) -> tuple[str, Mutant, TestRun]:
         name, m = pair
-        sb = sandbox.build_sandbox(cfg, ctx.python, auto, overrides={m.path: m.source})
+        sb = _sandbox(ctx, auto, overrides={m.path: m.source})
         try:
-            run = runner.run_pytest(
+            run = ctx.language.run_tests(
                 sb,
                 [],
                 cfg.mutation_timeout_s,
                 ctx.seed,
-                extra_args=[f"tests/auto/{name}", "-x"],
+                files=[f"tests/auto/{name}"],
+                fail_fast=True,
             )
         finally:
             sandbox.destroy(sb)
@@ -471,7 +485,7 @@ def gate_mutation(ctx: RunContext) -> GateResult:
             continue
         source = file.read_text(encoding="utf-8")
         mutants.extend(
-            mutator.generate_mutants(path, source, lines, ctx.seed, cfg.mutation_max_mutants)
+            ctx.language.generate_mutants(path, source, lines, ctx.seed, cfg.mutation_max_mutants)
         )
     if len(mutants) > cfg.mutation_max_mutants:
         picked = random.Random(ctx.seed).sample(mutants, cfg.mutation_max_mutants)
@@ -485,9 +499,9 @@ def gate_mutation(ctx: RunContext) -> GateResult:
         raise GateError("no golden or hidden tests to judge mutants")
     names = list(dirs)
     # A failing baseline would count every mutant as killed, so check it first.
-    sb = sandbox.build_sandbox(cfg, ctx.python, dirs)
+    sb = _sandbox(ctx, dirs)
     try:
-        baseline = runner.run_pytest(sb, names, cfg.timeout_s, ctx.seed)
+        baseline = ctx.language.run_tests(sb, names, cfg.timeout_s, ctx.seed)
     finally:
         sandbox.destroy(sb)
     ctx.log(f"mutation baseline exit={baseline.exit_code}\n{baseline.output}")
@@ -495,9 +509,12 @@ def gate_mutation(ctx: RunContext) -> GateResult:
         return _skip("mutation", "skipped: golden/hidden tests fail on unmutated code")
 
     def judge(m: Mutant) -> TestRun:
-        sb = sandbox.build_sandbox(cfg, ctx.python, dirs, overrides={m.path: m.source})
+        sb = _sandbox(ctx, dirs, overrides={m.path: m.source})
         try:
-            return runner.run_pytest(sb, names, cfg.mutation_timeout_s, ctx.seed, extra_args=["-x"])
+            run: TestRun = ctx.language.run_tests(
+                sb, names, cfg.mutation_timeout_s, ctx.seed, fail_fast=True
+            )
+            return run
         finally:
             sandbox.destroy(sb)
 

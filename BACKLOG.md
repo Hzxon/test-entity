@@ -23,7 +23,7 @@ Scope decisions made with the user on 2026-10-23:
 - Ships as a CLI plus a GitHub composite action.
 - Lives in `~/dev/testgate`, its own repo.
 
-## Current state (2026-10-23, commit 9629ed5 pushed to origin/main)
+## Current state (2026-10-23, main at ac5b38c, tag v0)
 
 Done and verified locally:
 - Seven gates in `src/testgate/gates.py`, run in order:
@@ -48,10 +48,16 @@ Done and verified locally:
 - Manually verified on a temp git repo: editing a golden test fails
   `protected`; a one-line source change produces exactly one mutant.
 
+Verified on GitHub (2026-10-23, tag `v0` at ac5b38c):
+- `.github/workflows/testgate-self.yml` runs the action on every PR; PR #12
+  showed the honest example PASS and the cheat example FAIL on hidden tests,
+  PR #13 showed that editing a protected golden test fails `protected`.
+- `--root` may be a subdirectory of the repository (monorepo layout).
+
 Not verified:
-- The GitHub Action and the workflow template have never run on GitHub.
 - The wheel has not been built; templates ship via `packages = ["src/testgate"]`
   but nobody checked the built artifact.
+- `TESTGATE_SEED` is not set in the repo yet, so CI runs with a random seed.
 
 Known limits (documented in README.md):
 - Python only.
@@ -84,7 +90,7 @@ An agent may only start an issue labeled `status:ready`. Nothing is `ready` yet.
 
 | # | Issue | Milestone |
 |---|---|---|
-| 1 | [Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1) | v0 |
+| 1 | ~~[Prove the GitHub Action on a real PR and tag v0](https://github.com/Hzxon/test-entity/issues/1)~~ done | v0 |
 | 2 | [ACH rule: flag agent tests that kill no mutant the suite misses](https://github.com/Hzxon/test-entity/issues/2) | v0.1 |
 | 3 | [Baseline coverage comparison against the base ref](https://github.com/Hzxon/test-entity/issues/3) | v0.1 |
 | 4 | [Reduce equivalent mutants](https://github.com/Hzxon/test-entity/issues/4) | v0.1 |

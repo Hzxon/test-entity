@@ -14,7 +14,11 @@ import pytest
 from testgate.core import GateError, ProjectConfig, Sandbox
 from testgate.languages.js import TOOLCHAIN_ENV, JsLanguage, trusted_modules
 
-pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+# In CI a missing toolchain is a failure, not a skip (#72).
+CI = bool(os.environ.get("CI"))
+pytestmark = pytest.mark.skipif(
+    not CI and shutil.which("node") is None, reason="node not installed"
+)
 
 LANG = JsLanguage()
 
@@ -32,7 +36,7 @@ NET = (
 
 @pytest.fixture(scope="session")
 def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    if shutil.which("npm") is None:
+    if shutil.which("npm") is None and not CI:
         pytest.skip("npm not installed")
     d = tmp_path_factory.mktemp("jsdeps")
     (d / "package.json").write_text(json.dumps({"name": "deps", "private": True, "type": "module"}))
@@ -42,8 +46,8 @@ def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "install",
             "--no-audit",
             "--no-fund",
-            "vitest@3",
-            "@vitest/coverage-v8@3",
+            "vitest@5.0.3",
+            "@vitest/coverage-v8@5.0.3",
             "fast-check@3",
             "typescript@5",
         ],
@@ -53,7 +57,7 @@ def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
         check=False,
     )
     if proc.returncode != 0:
-        pytest.skip(f"npm install failed: {proc.stderr[-300:]}")
+        (pytest.fail if CI else pytest.skip)(f"npm install failed: {proc.stderr[-300:]}")
     return d
 
 
@@ -167,7 +171,7 @@ EMPTY_LOCK = (
 def test_trusted_modules_install_from_the_base_ref(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if shutil.which("npm") is None:
+    if shutil.which("npm") is None and not CI:
         pytest.skip("npm not installed")
     monkeypatch.delenv(TOOLCHAIN_ENV, raising=False)
     repo = tmp_path / "repo"

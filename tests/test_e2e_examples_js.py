@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -17,8 +18,9 @@ HIDDEN = EXAMPLES / "discount-js-hidden"
 
 NODE = shutil.which("node")
 
+# In CI a missing toolchain is a failure, not a skip: a skipped suite proves nothing (#72).
 pytestmark = pytest.mark.skipif(
-    NODE is None or not (HONEST / "node_modules").is_dir(),
+    not os.environ.get("CI") and (NODE is None or not (HONEST / "node_modules").is_dir()),
     reason="node or examples/discount-js/node_modules missing (run npm ci)",
 )
 

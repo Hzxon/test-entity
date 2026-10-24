@@ -99,6 +99,8 @@ class PythonLanguage:
         return mutator.generate_mutants(path, source, lines, seed, max_mutants)
 
     def failed_files(self, run: TestRun) -> set[str]:
+        if run.failed_ids:  # node ids from the result channel: "tests/hidden/test_x.py::test_y"
+            return {nid.split("::", 1)[0] for nid in run.failed_ids}
         # pytest -rA lines: "FAILED tests/hidden/test_x.py::test_y - ..." / "ERROR tests/hidden/test_x.py"
         return {m.group(1) for m in _FAILED_LINE.finditer(run.output)}
 

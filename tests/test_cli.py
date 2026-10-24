@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -373,3 +374,52 @@ def test_run_http_differential_catches_undeclared_behaviour_change(tmp_path: Pat
     assert mutation["spec_changed"] is True
     assert "human must review" in mutation["summary"]
     assert code == 1
+
+
+# --- secure workflow template (#69) -------------------------------------------
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_init_workflow_is_locked_down(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import yaml
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "--action", f"acme/testgate@{SHA}"]) == 0
+    text = (tmp_path / ".github/workflows/testgate.yml").read_text()
+    wf = yaml.safe_load(text)
+    assert wf["permissions"] == {"contents": "read"}
+    job = wf["jobs"]["testgate"]
+    assert job["environment"] == "testgate"
+    uses = [s["uses"] for s in job["steps"] if "uses" in s]
+    assert uses[-1] == f"acme/testgate@{SHA}"
+    for ref in uses:
+        assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", ref), ref  # every action pinned by SHA
+    for step in job["steps"]:
+        if step.get("uses", "").startswith("actions/checkout@"):
+            assert step["with"]["persist-credentials"] is False
+    assert "upload-artifact" not in text and "private" not in text.split("never uploaded")[1]
+    assert "@v0" not in text
+
+
+def test_init_without_action_emits_a_sha_placeholder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["init"]) == 0
+    assert (
+        "uses: <owner>/testgate@<full-sha>"
+        in (tmp_path / ".github/workflows/testgate.yml").read_text()
+    )
+    assert "Replace <owner>/testgate@<full-sha>" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "bad", ["acme/testgate@v0", "acme/testgate@main", "acme/testgate@abc123", "testgate@" + SHA]
+)
+def test_init_refuses_unpinned_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "--action", bad]) == 2
+    assert not (tmp_path / ".github").exists()

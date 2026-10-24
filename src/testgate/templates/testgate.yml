@@ -3,32 +3,47 @@ name: testgate
 on:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: testgate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   testgate:
     runs-on: ubuntu-latest
+    # The secrets live in this environment, not at repository level. Give it a
+    # required reviewer: the change supplies this workflow file too, so the
+    # reviewer reads the .github/** diff before approving the run.
+    environment: testgate
     env:
       # secrets cannot be used in step-level `if`, so expose one through env
       HIDDEN_REPO: ${{ secrets.TESTGATE_HIDDEN_REPO }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The hidden tests live in a private repository the PR author cannot read.
       # Give CI a read-only deploy key for it: `ssh-keygen -t ed25519 -f key`,
-      # add key.pub as a deploy key on that repo, store key in the secret
-      # TESTGATE_HIDDEN_SSH_KEY, and set TESTGATE_HIDDEN_REPO to owner/name.
+      # add key.pub as a deploy key on that repo, store key in the environment
+      # secret TESTGATE_HIDDEN_SSH_KEY, and set TESTGATE_HIDDEN_REPO to owner/name.
       - name: Check out hidden tests
         if: env.HIDDEN_REPO != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: ${{ env.HIDDEN_REPO }}
           ref: main  # set explicitly: resolving the default branch needs API access the token lacks
           ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}
           path: .testgate-hidden
+          persist-credentials: false
 
+      # Pinned by full commit SHA: the change under test must never pick the gate.
+      # The private log is never uploaded: artifacts are readable by the PR author.
       - name: Run testgate
-        uses: <owner>/testgate@v0  # placeholder: replace <owner>
+        uses: __ACTION__
         with:
           base: origin/${{ github.base_ref }}
           hidden-dir: ${{ github.workspace }}/.testgate-hidden

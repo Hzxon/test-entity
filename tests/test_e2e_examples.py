@@ -75,18 +75,31 @@ def test_honest_example_passes(tmp_path):
 
 
 @needs_cli
-def test_cheat_example_fails_without_leaking_hidden_names(tmp_path):
-    code, out, priv = _run_cli(CHEAT, tmp_path)
+def test_cheat_example_fails_without_leaking_hidden_names(tmp_path, capsys, monkeypatch):
+    from testgate.cli import main
+
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    out, priv = tmp_path / "out.json", tmp_path / "priv.log"
+    argv = ["run", "--root", str(CHEAT), "--no-git", "--json", str(out), "--private-log", str(priv)]
+    code = main(argv)
     assert code == 1
     public = out.read_text()
     gates = {g["name"]: g for g in json.loads(public)["gates"]}
     assert gates["hidden"]["status"] == "fail"
-    names = re.findall(r"def (test_\w+)", (HIDDEN / "test_hidden.py").read_text())
+    source = (HIDDEN / "test_hidden.py").read_text()
+    names = re.findall(r"def (test_\w+)", source)
     assert names
-    for name in names:
-        assert name not in public
-    private = priv.read_text()
-    assert any(name in private for name in names)
+    asserts = [line.strip() for line in source.splitlines() if line.strip().startswith("assert")]
+    assert asserts
+    captured = capsys.readouterr()
+    # #51: no hidden id, path or source line in any output the author can read
+    for text in (public, priv.read_text(), summary.read_text(), captured.out, captured.err):
+        assert "test_hidden.py" not in text
+        for name in names:
+            assert name not in text
+        for line in asserts:
+            assert line not in text
 
 
 def test_golden_passes_on_honest_example():

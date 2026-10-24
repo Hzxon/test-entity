@@ -670,21 +670,27 @@ class HttpLanguage:
                 try:
                     a, b = send_head(case), send_base(case)
                 except OSError as exc:
-                    private.append({"case": case.name, "route": route, "error": str(exc)})
+                    private.append(
+                        {"case": self._survivor(case, route, i)["case"], "route": route}
+                        | {"error": str(exc)}
+                    )
                     survivors.append(self._survivor(case, route, i))
                     continue
                 same = same_response(a, b)
                 identical += same
-                private.append(
-                    {
-                        "case": case.name,
+                entry: dict[str, Any] = {
+                    "case": self._survivor(case, route, i)["case"],
+                    "route": route,
+                    "identical": same,
+                }
+                if not case.file.startswith("tests/hidden/"):
+                    # hidden fixtures stay out of the log: no file, request or body (#51)
+                    entry |= {
                         "file": case.file,
-                        "route": route,
-                        "identical": same,
                         "head": [a.status, a.text()[:500]],
                         "base": [b.status, b.text()[:500]],
                     }
-                )
+                private.append(entry)
                 if not same:
                     survivors.append(self._survivor(case, route, i))
             score = identical / len(pairs)

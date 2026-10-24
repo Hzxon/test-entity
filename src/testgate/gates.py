@@ -48,6 +48,15 @@ _IMPORT_GOLDEN_HIDDEN = re.compile(
     r"|from\s+tests\s+import\s+.*\b(?:golden|hidden)\b)"
 )
 MAX_UNCOVERED_PER_FILE = 20
+# Stands in for the output of any run that included hidden tests (#51): pytest and
+# vitest print node ids, file paths and assertion source, and the job log, the
+# private log and every report are readable by the author of the change.
+HIDDEN_REDACTED = "<redacted: run included hidden tests>"
+
+
+def _output(run: TestRun, names: Any) -> str:
+    """Run output safe to keep: redacted when the run included hidden tests."""
+    return HIDDEN_REDACTED if "hidden" in names else run.output
 
 
 def _result(
@@ -288,7 +297,9 @@ def gate_hidden(ctx: RunContext) -> GateResult:
         sandbox.destroy(sb)
     # counts only: names and assertion text stay in the private log
     public = {"passed": run.passed, "failed": run.failed, "errors": run.errors}
-    private = {"output": run.output, "exit_code": run.exit_code}
+    private = {
+        "exit_code": run.exit_code
+    }  # output, ids and paths of hidden tests never leave memory
     summary = f"hidden: {run.passed} passed, {run.failed} failed"
     if run.errors:
         summary += f", {run.errors} errors"
@@ -312,6 +323,7 @@ def _measure_coverage(ctx: RunContext) -> tuple[TestRun, CoverageData]:
     finally:
         sandbox.destroy(sb)
     ctx.shared["coverage"] = data
+    ctx.shared["coverage_dirs"] = list(dirs)
     return run, data
 
 
@@ -328,7 +340,7 @@ def _hidden_passing_at_base(
         run = ctx.language.run_tests(sb, ["hidden"], ctx.config.timeout_s, ctx.seed)
     finally:
         sandbox.destroy(sb)
-    ctx.log(f"hidden at base exit={run.exit_code}\n{run.output}")
+    ctx.log(f"hidden at base exit={run.exit_code}")
     if run.ok:
         return ctx.hidden_dir, 0
     failed = {Path(f).name for f in ctx.language.failed_files(run)}
@@ -339,7 +351,7 @@ def _hidden_passing_at_base(
         ctx.hidden_dir, filtered, ignore=lambda _d, names: [n for n in names if n in failed]
     )
     remaining = [p for p in filtered.rglob(ctx.language.test_glob) if p.is_file()]
-    ctx.log(f"hidden files excluded at base: {sorted(failed)}")
+    ctx.log(f"hidden files excluded at base: {len(failed)}")
     return (filtered if remaining else None), len(failed)
 
 
@@ -378,7 +390,7 @@ def _baseline_coverage(ctx: RunContext) -> tuple[CoverageData | None, str, int]:
             )
         finally:
             sandbox.destroy(sb)
-        ctx.log(f"baseline coverage exit={run.exit_code}\n{run.output}")
+        ctx.log(f"baseline coverage exit={run.exit_code}\n{_output(run, dirs)}")
         if not run.ok:
             return None, "tests fail at base ref", excluded
         ctx.shared["baseline_coverage"] = data
@@ -417,7 +429,10 @@ def gate_coverage(ctx: RunContext) -> GateResult:
         "changed": None if changed_ratio is None else round(changed_ratio, 4),
         "uncovered_changed": uncovered,
     }
-    private = {"output": run.output, "exit_code": run.exit_code}
+    private = {
+        "output": _output(run, ctx.shared.get("coverage_dirs", [])),
+        "exit_code": run.exit_code,
+    }
     problems: list[str] = []
     if not run.ok:
         problems.append("tests failed under coverage")
@@ -545,7 +560,7 @@ def gate_mutation(ctx: RunContext) -> GateResult:
         baseline = ctx.language.run_tests(sb, names, cfg.timeout_s, ctx.seed)
     finally:
         sandbox.destroy(sb)
-    ctx.log(f"mutation baseline exit={baseline.exit_code}\n{baseline.output}")
+    ctx.log(f"mutation baseline exit={baseline.exit_code}\n{_output(baseline, names)}")
     if not baseline.ok:
         return _skip("mutation", "skipped: golden/hidden tests fail on unmutated code")
 
@@ -604,7 +619,7 @@ def gate_mutation(ctx: RunContext) -> GateResult:
                 "killed": m.killed,
                 "exit_code": m.run.exit_code if m.run else None,
                 "timed_out": m.run.timed_out if m.run else None,
-                "output": m.run.output if m.run else "",
+                "output": _output(m.run, names) if m.run else "",
             }
             for m in mutants
         ],

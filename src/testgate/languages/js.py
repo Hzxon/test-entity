@@ -216,6 +216,8 @@ class JsLanguage:
         exit_code = proc.returncode
         if exit_code == 0 and (passed + failed == 0 or errors > 0):
             exit_code = 1
+        if "hidden" in names:
+            details = []  # no hidden test names or assertion text, even in memory (#51)
         return TestRun(
             exit_code=exit_code,
             passed=passed,

@@ -60,7 +60,10 @@ def test_cheat_http_example_fails_without_leaking_hidden_names(tmp_path: Path) -
     assert len(names) == 7
     for name in names:
         assert name not in public
-    assert any(name in priv.read_text() for name in names)
+    private = priv.read_text()
+    assert "tests/hidden/" not in private
+    for name in names:
+        assert name not in private  # #51: hidden names stay out of the private log too
     assert code == 1
 
 

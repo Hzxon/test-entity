@@ -58,7 +58,7 @@ Hidden tests live outside the repo. The path comes from `hidden:` in `testgate.y
     base: origin/${{ github.base_ref }}
 ```
 
-The action uploads `testgate-private.log` as the `testgate-private` artifact and sets the `verdict` output.
+The action sets the `verdict` output. It never uploads `testgate-private.log`: artifacts and job logs are readable by the author of the change, so the private log stays on the runner, and runs that include hidden tests are redacted even there (no hidden test names, paths or assertion text).
 
 ## Languages
 

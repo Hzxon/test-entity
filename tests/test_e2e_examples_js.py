@@ -119,4 +119,6 @@ def test_cheat_example_fails_without_leaking_hidden_names(tmp_path):
     for name in names:
         assert name not in public
     private = priv.read_text()
-    assert any(name in private for name in names)
+    assert "hidden.test.js" not in private
+    for name in names:
+        assert name not in private  # #51: hidden names stay out of the private log too

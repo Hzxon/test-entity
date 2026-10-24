@@ -8,6 +8,17 @@ tests:
 protected:
   - tests/golden
   - testgate.yaml
+  # the workflow, the action and the build/dependency surface the gate itself runs on (#47)
+  - .github
+  - action.yml
+  - pyproject.toml
+  - uv.lock
+  - requirements.lock
+  # agent configuration a checkout would load on the owner's machine (#61)
+  - .claude
+  - .mcp.json
+  - CLAUDE.md
+  - AGENTS.md
 gates:
   # testgate's own source legitimately names TESTGATE, PYTEST_CURRENT_TEST and
   # tests/hidden, which the hygiene scan treats as test-detection attempts.

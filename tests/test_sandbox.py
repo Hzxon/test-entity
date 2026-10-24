@@ -181,3 +181,61 @@ def test_custom_dest_and_overrides(project: tuple[ProjectConfig, dict[str, Path]
         assert box.env["PYTHONPATH"] == f"{box.root}:{box.root / 'src'}"
     finally:
         destroy(box)
+
+
+DAEMON = (
+    "import os, sys, time\n"
+    "if os.fork() == 0:\n"
+    "    time.sleep(300)  # marker: {marker}\n"
+    "    sys.exit(0)\n"
+    "print('parent done')\n"
+)
+
+
+def _alive(marker: str) -> bool:
+    import subprocess
+
+    return subprocess.run(["pgrep", "-f", marker], check=False, capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+def test_forked_daemon_does_not_outlive_the_run(project, tmp_path: Path) -> None:
+    cfg, tests = project
+    sb = build_sandbox(cfg, sys.executable, tests)
+    marker = f"tg-daemon-{tmp_path.name}"
+    script = sb.root / "daemon.py"
+    script.write_text(DAEMON.replace("{marker}", marker))
+    try:
+        proc = run_in_sandbox(sb, [sys.executable, str(script), marker], 30)
+        assert proc.returncode == 0
+        assert "parent done" in proc.stdout
+        assert not _alive(marker)
+    finally:
+        destroy(sb)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork")
+def test_timeout_kills_the_whole_group(project, tmp_path: Path) -> None:
+    cfg, tests = project
+    sb = build_sandbox(cfg, sys.executable, tests)
+    marker = f"tg-slow-{tmp_path.name}"
+    code = "import os, time\nos.fork()\ntime.sleep(300)\n"
+    try:
+        proc = run_in_sandbox(sb, [sys.executable, "-c", code, marker], 2)
+        assert proc.returncode == 124
+        assert not _alive(marker)
+    finally:
+        destroy(sb)
+
+
+def test_daemon_holding_stdout_does_not_stall(project, tmp_path: Path) -> None:
+    cfg, tests = project
+    sb = build_sandbox(cfg, sys.executable, tests)
+    # the grandchild inherits stdout; with pipes the run would wait for it to exit
+    code = "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\nprint('ok')\n"
+    try:
+        proc = run_in_sandbox(sb, [sys.executable, "-c", code], 60)
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == "ok"
+    finally:
+        destroy(sb)

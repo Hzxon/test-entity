@@ -8,7 +8,8 @@ permissions: {}
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # cancel superseded PR runs only: every push to main must finish its own run
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:

@@ -37,8 +37,8 @@ Option 2, with the status signed by a dedicated GitHub App:
   deployments allowed from `main` only. A `pull_request` run (ref
   `refs/pull/N/merge`) can never read its secrets.
 - After the gate step, the job mints a token for the **testgate gate app**
-  (permission `statuses: write` only; app id in the variable
-  `TESTGATE_APP_ID`, private key in the environment secret `TESTGATE_APP_KEY`)
+  (permission `statuses: write` only; Client ID in the variable
+  `TESTGATE_APP_CLIENT_ID`, private key in the environment secret `TESTGATE_APP_KEY`)
   and posts the commit status `testgate/verdict` on the PR head SHA.
 - The `main` ruleset requires the status check `testgate/verdict` with the
   gate app's integration id. A PR workflow cannot mint that app's token, so it
@@ -66,7 +66,7 @@ Option 2, with the status signed by a dedicated GitHub App:
 1. Create a GitHub App "testgate gate" (no webhook, repository permission
    Commit statuses: read and write, nothing else), install it on
    Hzxon/test-entity only.
-2. Set variable `TESTGATE_APP_ID` (repository) and secret `TESTGATE_APP_KEY`
+2. Set variable `TESTGATE_APP_CLIENT_ID` (repository) and secret `TESTGATE_APP_KEY`
    (environment `testgate`) from the app.
 3. Environment `testgate`: deployment branches limited to `main`.
 4. Ruleset `main: PR + green checks`: require status `testgate/verdict` from

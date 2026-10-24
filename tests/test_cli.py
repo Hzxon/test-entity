@@ -360,7 +360,7 @@ def test_run_http_differential_catches_undeclared_behaviour_change(tmp_path: Pat
     assert mutation["survivors"] == [{"route": "POST /price", "case": "price", "file": "golden"}]
     assert code == 1
 
-    # declare the change in the spec: the route is excluded and the rest match
+    # #66: editing the spec no longer exempts the route; the edit is flagged for review
     spec = root / "svc" / "openapi.yaml"
     spec.write_text(
         spec.read_text().replace("post: {summary: price}", "post: {summary: price in EUR}")
@@ -368,6 +368,8 @@ def test_run_http_differential_catches_undeclared_behaviour_change(tmp_path: Pat
     code = main(["run", "--root", str(root), "--base", "main", "--json", str(out), "--quiet"])
     report = json.loads(out.read_text())
     mutation = next(g for g in report["gates"] if g["name"] == "mutation")
-    assert mutation["status"] == "pass", mutation
-    assert mutation["compared"] == 2 and mutation["changed_routes"] == 1
-    assert code == 0
+    assert mutation["status"] == "fail", mutation
+    assert mutation["compared"] == 3 and mutation["changed_routes"] == 0
+    assert mutation["spec_changed"] is True
+    assert "human must review" in mutation["summary"]
+    assert code == 1

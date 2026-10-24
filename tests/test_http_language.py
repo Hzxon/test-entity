@@ -341,7 +341,39 @@ def test_run_coverage_counts_routes_hit(project: ProjectConfig):
         destroy(sb)
 
 
-def test_changed_units_are_routes_whose_spec_changed(project: ProjectConfig, tmp_path: Path):
+def test_run_coverage_uses_the_base_spec(project: ProjectConfig) -> None:
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@x", "-c", "user.name=t", *args],
+            cwd=project.root,
+            check=True,
+            capture_output=True,
+        )
+
+    spec = project.root / "svc" / "openapi.yaml"
+    spec.write_text(OPENAPI)
+    project.http_openapi = "openapi.yaml"
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    # the change drops every route its fixtures miss, to reach 100% route coverage
+    spec.write_text(
+        "openapi: 3.0.0\npaths:\n  /price:\n    post: {summary: p}\n"
+        "  /orders/{id}:\n    get: {summary: o}\n"
+    )
+    project.raw = {"_source": "main"}
+    sb = sandbox_for(project)
+    try:
+        LANG.build(sb, project, 30)
+        _, data = LANG.run_coverage(sb, ["golden"], 60, "seed", "svc")
+        assert len(data.statements) == 5 and data.total() == 0.4  # judged by the base spec
+    finally:
+        destroy(sb)
+
+
+def test_changed_units_come_from_the_base_spec(project: ProjectConfig, tmp_path: Path):
     import subprocess
 
     from testgate.core import RunContext
@@ -366,13 +398,39 @@ def test_changed_units_are_routes_whose_spec_changed(project: ProjectConfig, tmp
         + "  /refunds:\n    post: {summary: refund}\n"
     )
     ctx = RunContext(project, "main", [], None, "s", False, sys.executable, language=LANG)
-    changed = LANG.changed_units(ctx)
-    assert sorted(c.path for c in changed) == [
-        "openapi.yaml#POST /price",
-        "openapi.yaml#POST /refunds",
-    ]
+    # #66: editing POST /price changes nothing; only the added route counts
+    assert [c.path for c in LANG.changed_units(ctx) or []] == ["openapi.yaml#POST /refunds"]
+    assert LANG.spec_changed(ctx) is True
+    spec.write_text(OPENAPI)
+    assert LANG.spec_changed(ctx) is False
     ctx.base_ref = None
     assert LANG.changed_units(ctx) is None
+    assert LANG.spec_changed(ctx) is False
+
+
+def test_changed_units_first_adoption_marks_every_route(project: ProjectConfig) -> None:
+    import subprocess
+
+    from testgate.core import RunContext
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@x", "-c", "user.name=t", *args],
+            cwd=project.root,
+            check=True,
+            capture_output=True,
+        )
+
+    git("init", "-q", "-b", "main")
+    (project.root / "README").write_text("x\n")
+    git("add", "README")
+    git("commit", "-q", "-m", "base without a spec")
+    (project.root / "svc" / "openapi.yaml").write_text(OPENAPI)
+    project.http_openapi = "openapi.yaml"
+    ctx = RunContext(project, "main", [], None, "s", False, sys.executable, language=LANG)
+    changed = sorted(c.path for c in LANG.changed_units(ctx) or [])
+    assert changed and all(c.startswith("openapi.yaml#") for c in changed)
+    assert LANG.spec_changed(ctx) is False  # nothing at the base to differ from
 
 
 # --- differential gate (#35) ---------------------------------------------------

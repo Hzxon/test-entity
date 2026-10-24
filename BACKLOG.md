@@ -125,6 +125,8 @@ and a `testgate init --language http` template.
 
 ## Decisions taken
 
+- ADR 0003 (2026-10-24): the self-gate runs on `pull_request_target` from `main`; its verdict is the commit status `testgate/verdict`, signed by the "testgate gate" GitHub App and required by the `main` ruleset. test-entity is public so the `testgate` environment can have a reviewer and a `main`-only branch policy.
+
 - #9 (2026-10-23): hidden tests required by default; `gates.hidden.required: false`
   turns the gate into SKIP for repos that opt out.
 - #10 (2026-10-23): useless auto tests warn by default;

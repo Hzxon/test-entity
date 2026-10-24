@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Keep a gh config dir holding only the agents' GitHub App token, re-minted when stale.
+#
+#   scripts/agent-gh-refresh [--env] <app-id> <private-key.pem> <config-dir> [max-age-min]
+#
+# Agent sessions set GH_CONFIG_DIR=<config-dir> and route git's credentials through
+# `gh auth git-credential`, so gh and git act as the app and never find the owner's
+# keyring login, even with GH_TOKEN unset. Run it from the SessionStart hook with
+# --env (prints those exports for CLAUDE_ENV_FILE) and from a PreToolUse hook
+# without: it re-mints only when the token is older than max-age-min (default 45;
+# tokens live 60), so a long session never holds an expired token.
+set -euo pipefail
+
+print_env=false
+if [ "${1:-}" = "--env" ]; then
+  print_env=true
+  shift
+fi
+[ $# -ge 3 ] || { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+app=$1
+key=$2
+dir=$3
+max_age=${4:-45}
+hosts="$dir/hosts.yml"
+
+if [ ! -f "$hosts" ] || [ -n "$(find "$hosts" -mmin +"$max_age")" ]; then
+  umask 077
+  mkdir -p "$dir"
+  token=$("$(dirname "$0")/agent-gh-token" "$app" "$key")
+  tmp=$(mktemp "$dir/hosts.yml.XXXXXX")
+  printf 'github.com:\n    oauth_token: %s\n    user: testgate-agent[bot]\n    git_protocol: https\n' \
+    "$token" >"$tmp"
+  mv -f "$tmp" "$hosts"
+fi
+
+if $print_env; then
+  # An empty credential.helper clears the helpers from system and global config
+  # (osxkeychain holds the owner's login); the second entry is the only one left.
+  cat <<EOF
+unset GH_TOKEN GITHUB_TOKEN
+export GH_CONFIG_DIR='$dir'
+export GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=credential.helper
+export GIT_CONFIG_VALUE_0=
+export GIT_CONFIG_KEY_1=credential.helper
+export GIT_CONFIG_VALUE_1='!gh auth git-credential'
+EOF
+fi

@@ -239,9 +239,9 @@ def test_fail_fast_adds_bail(sb: Sandbox, monkeypatch: pytest.MonkeyPatch) -> No
     seen: list[list[str]] = []
     real = js.run_in_sandbox
 
-    def spy(box: Sandbox, argv: list[str], timeout_s: int, extra_env: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
+    def spy(box: Sandbox, argv: list[str], timeout_s: int, extra_env=None, **kw):  # type: ignore[no-untyped-def]
         seen.append(argv)
-        return real(box, argv, timeout_s, extra_env)
+        return real(box, argv, timeout_s, extra_env, **kw)
 
     monkeypatch.setattr(js, "run_in_sandbox", spy)
     LANG.run_tests(sb, ["golden"], 120, "s", fail_fast=True)

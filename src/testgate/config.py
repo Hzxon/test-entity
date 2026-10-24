@@ -32,7 +32,7 @@ TOP_KEYS = {
 LANGUAGES = ("python", "js", "http")
 HTTP_KEYS = {"start", "health", "startup_timeout_s", "openapi", "env"}
 TESTS_KEYS = {"golden", "auto", "hidden", "hidden_env"}
-SANDBOX_KEYS = {"network", "timeout_s", "python"}
+SANDBOX_KEYS = {"network", "timeout_s", "python", "require_isolation"}
 
 # gate name -> {YAML option -> ProjectConfig field}
 GATE_OPTIONS: dict[str, dict[str, str]] = {
@@ -177,6 +177,8 @@ def load_config(root: Path, base_ref: str | None) -> ProjectConfig:
         cfg.timeout_s = sandbox["timeout_s"]
     if sandbox.get("python") is not None:
         cfg.python = _string("sandbox.python", sandbox["python"])
+    if "require_isolation" in sandbox:
+        cfg.require_isolation = sandbox["require_isolation"]
 
     http = _mapping("http", data.get("http"))
     _check_keys("http", http, HTTP_KEYS)
@@ -241,3 +243,5 @@ def _validate(cfg: ProjectConfig) -> None:
         raise GateError(f"{CONFIG_FILE}: gates.hidden.required must be true or false")
     if not isinstance(cfg.network, bool):
         raise GateError(f"{CONFIG_FILE}: sandbox.network must be true or false")
+    if not isinstance(cfg.require_isolation, bool):
+        raise GateError(f"{CONFIG_FILE}: sandbox.require_isolation must be true or false")

@@ -96,7 +96,9 @@ def _run_with_channel(
         "PYTHONPATH": f"{_channel_dir()}{os.pathsep}{sb.env.get('PYTHONPATH', '')}",
     }
     try:
-        proc = run_in_sandbox(sb, argv, timeout_s, env, pass_fds=(write_fd,))
+        proc = run_in_sandbox(
+            sb, argv, timeout_s, env, pass_fds=(write_fd,), binds={str(_channel_dir()): False}
+        )
     finally:
         os.close(write_fd)
     # A process left holding the pipe would block EOF; whatever arrived so far is used.

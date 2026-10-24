@@ -47,7 +47,8 @@ def to_markdown(report: Report) -> str:
     lines.append("")
     lines.append(
         f"base: {report.base_ref or 'none'}; changed: {report.changed_files} file(s), "
-        f"{report.changed_lines} line(s); seed_is_secret: {str(report.seed_is_secret).lower()}"
+        f"{report.changed_lines} line(s); seed_is_secret: {str(report.seed_is_secret).lower()}; "
+        f"isolation: {report.isolation}"
     )
     for g in report.gates:
         if not g.public:

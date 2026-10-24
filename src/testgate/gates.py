@@ -418,6 +418,20 @@ def _changed_ratio(
     return ((covered / total) if total else None), uncovered
 
 
+def _changed_sources(ctx: RunContext) -> list[str]:
+    """Changed files under the package with a source suffix of the language."""
+    pkg = ctx.config.package.strip("/")
+    prefix = "" if pkg in ("", ".") else pkg + "/"
+    suffixes = ctx.language.source_suffixes
+    return sorted(
+        c.path
+        for c in ctx.changed
+        if c.path.startswith(prefix)
+        and c.path.endswith(suffixes)
+        and (ctx.config.root / c.path).is_file()
+    )
+
+
 def gate_coverage(ctx: RunContext) -> GateResult:
     cfg = ctx.config
     run, data = _measure_coverage(ctx)
@@ -426,6 +440,9 @@ def gate_coverage(ctx: RunContext) -> GateResult:
     overlay = getattr(ctx.language, "changed_units", None)
     changed = (overlay(ctx) if overlay else None) or ctx.changed
     changed_ratio, uncovered = _changed_ratio(changed, data) if changed else (None, [])
+    # Missing data never counts as covered (#63): a changed source file the coverage
+    # run did not measure at all, or no measured statements while sources changed.
+    unmeasured = [] if overlay else [p for p in _changed_sources(ctx) if p not in data.statements]
     public: dict[str, Any] = {
         "total": round(total, 4),
         "changed": None if changed_ratio is None else round(changed_ratio, 4),
@@ -438,6 +455,11 @@ def gate_coverage(ctx: RunContext) -> GateResult:
     problems: list[str] = []
     if not run.ok:
         problems.append("tests failed under coverage")
+    if unmeasured:
+        public["unmeasured_changed"] = unmeasured
+        problems.append(f"{len(unmeasured)} changed source file(s) not measured")
+    elif not any(data.statements.values()) and (overlay is None and _changed_sources(ctx)):
+        problems.append("no statements measured")
     baseline, reason, excluded = _baseline_coverage(ctx)
     public["baseline_hidden_excluded"] = excluded  # count only; file names stay private
     if baseline is None:
@@ -564,7 +586,13 @@ def gate_mutation(ctx: RunContext) -> GateResult:
         sandbox.destroy(sb)
     ctx.log(f"mutation baseline exit={baseline.exit_code}\n{_output(baseline, names)}")
     if not baseline.ok:
-        return _skip("mutation", "skipped: golden/hidden tests fail on unmutated code")
+        # fail closed (#63): a failing baseline would otherwise hide every mutant
+        return _result(
+            "mutation",
+            Status.FAIL,
+            "golden/hidden tests fail on unmutated code",
+            {"baseline_exit_code": baseline.exit_code},
+        )
 
     def judge(m: Mutant) -> TestRun:
         sb = _sandbox(ctx, dirs, overrides={m.path: m.source})

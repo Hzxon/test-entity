@@ -624,14 +624,14 @@ def test_mutation_runs_coverage_when_absent(
     assert "coverage" in ctx.shared
 
 
-def test_mutation_skips_when_baseline_fails(
+def test_mutation_fails_when_baseline_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fakes: Fakes
 ) -> None:
     install_mutator(fakes, {"src/pkg/a.py": 2})
     ctx = mutation_ctx(tmp_path)
     fakes.runs = [tr(1, 1, 1)]
     result = gates.gate_mutation(ctx)
-    assert result.status is Status.SKIP
+    assert result.status is Status.FAIL  # fail closed (#63)
     assert "unmutated" in result.summary
     assert len(fakes.pytest_calls) == 1  # no mutant was run
 
@@ -845,3 +845,43 @@ def test_mutation_parallel_jobs_give_same_report(
         m["id"] for m in parallel.private["mutants"]
     )
     assert len(set(seen)) > 1  # more than one worker thread ran mutants
+
+
+# --- fail closed on missing data (#63) ---------------------------------------
+
+
+def test_coverage_fails_when_changed_source_is_not_measured(tmp_path: Path, fakes: Fakes) -> None:
+    write(tmp_path, "src/pkg/a.py", "x = 1\n")
+    write(tmp_path, "src/pkg/b.py", "y = 2\n")
+    changed = [ChangedFile("src/pkg/a.py", {1}), ChangedFile("src/pkg/b.py", {1})]
+    ctx = make_ctx(tmp_path, changed=changed, coverage_min_changed=0.0)
+    fakes.coverage = (tr(), cov({"src/pkg/a.py": {1}}, {"src/pkg/a.py": {1}}))
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.FAIL
+    assert result.public["unmeasured_changed"] == ["src/pkg/b.py"]
+    assert "not measured" in result.summary
+
+
+def test_coverage_fails_on_empty_data_with_changed_sources(tmp_path: Path, fakes: Fakes) -> None:
+    write(tmp_path, "src/pkg/a.py", "x = 1\n")
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("src/pkg/a.py", {1})], coverage_min_changed=0.0)
+    fakes.coverage = (tr(), cov({"src/pkg/a.py": set()}, {}))  # total() alone would say 100%
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.FAIL
+    assert "no statements measured" in result.summary
+
+
+def test_coverage_comment_only_change_in_measured_file_passes(tmp_path: Path, fakes: Fakes) -> None:
+    write(tmp_path, "src/pkg/a.py", "# note\nx = 1\n")
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("src/pkg/a.py", {1})])
+    fakes.coverage = (tr(), cov({"src/pkg/a.py": {2}}, {"src/pkg/a.py": {2}}))
+    result = gates.gate_coverage(ctx)
+    assert result.status is Status.PASS
+    assert result.public["changed"] is None
+
+
+def test_coverage_ignores_changes_outside_the_package(tmp_path: Path, fakes: Fakes) -> None:
+    write(tmp_path, "docs/x.py", "x = 1\n")
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("docs/x.py", {1})])
+    fakes.coverage = (tr(), cov({}, {}))
+    assert gates.gate_coverage(ctx).status is Status.PASS

@@ -31,8 +31,8 @@ Run it locally with `testgate run --base origin/main`, or `testgate run --no-git
 | build | Package imports and compiles | exit code | yes |
 | tests | Golden and auto tests pass, `repeats` times (flaky check) | pass/fail counts | yes |
 | hidden | Hidden tests pass | pass/fail counts | yes |
-| coverage | Total and changed-line coverage, and total coverage must not drop vs the base ref by more than `max_drop` | percentages, uncovered file:line, baseline total and drop | yes |
-| mutation | Mutants of changed, covered lines are killed by golden + hidden tests; each auto test file must kill a mutant they missed (the ACH rule) | generated, killed, score, survivor file:line, `auto_useless` file names | yes below `min_score`; useless auto tests warn, or fail with `auto_useless_blocks: true` |
+| coverage | Total and changed-line coverage, and total coverage must not drop vs the base ref by more than `max_drop`. Missing data fails: a changed source file the run did not measure, or no measured statements at all | percentages, uncovered file:line, unmeasured changed files, baseline total and drop | yes |
+| mutation | Mutants of changed, covered lines are killed by golden + hidden tests; each auto test file must kill a mutant they missed (the ACH rule). Golden + hidden tests failing on the unmutated code fails the gate | generated, killed, score, survivor file:line, `auto_useless` file names | yes below `min_score`; useless auto tests warn, or fail with `auto_useless_blocks: true` |
 
 ## Hidden tests and the seed
 

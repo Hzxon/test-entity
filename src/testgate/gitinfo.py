@@ -54,7 +54,11 @@ def head_sha(root: Path) -> str:
 
 
 def _parse_diff(diff: str) -> dict[str, set[int]]:
-    """Map each .py file in a --unified=0 diff to its added/modified line numbers."""
+    """Map each file in a --unified=0 diff to its added/modified line numbers.
+
+    Every language's sources count (#64): a .py-only filter left JS and other
+    changed lines invisible to the coverage and mutation gates.
+    """
     out: dict[str, set[int]] = {}
     current: str | None = None
     for line in diff.splitlines():
@@ -63,10 +67,8 @@ def _parse_diff(diff: str) -> dict[str, set[int]]:
             if target == "/dev/null" or not target.startswith("b/"):
                 current = None
             else:
-                path = target[2:]
-                current = path if path.endswith(".py") else None
-                if current is not None:
-                    out.setdefault(current, set())
+                current = target[2:]
+                out.setdefault(current, set())
             continue
         if current is None:
             continue
@@ -84,8 +86,18 @@ def changed_lines(root: Path, base_ref: str) -> list[ChangedFile]:
     mb = _git(root, "merge-base", base_ref, "HEAD")
     if mb.returncode != 0:
         raise RuntimeError(f"git merge-base failed: {mb.stderr.strip()}")
+    # --text, --no-textconv and --no-ext-diff: a PR-committed .gitattributes
+    # (binary, -diff, diff=<driver>) cannot hide changed lines (#64).
     diff = _git(
-        root, "diff", "--unified=0", "--no-color", "--no-ext-diff", "--relative", mb.stdout.strip()
+        root,
+        "diff",
+        "--unified=0",
+        "--no-color",
+        "--text",
+        "--no-textconv",
+        "--no-ext-diff",
+        "--relative",
+        mb.stdout.strip(),
     )
     if diff.returncode != 0:
         raise RuntimeError(f"git diff failed: {diff.stderr.strip()}")
@@ -93,8 +105,6 @@ def changed_lines(root: Path, base_ref: str) -> list[ChangedFile]:
 
     untracked = _git(root, "ls-files", "--others", "--exclude-standard")
     for rel in untracked.stdout.splitlines():
-        if not rel.endswith(".py"):
-            continue
         try:
             text = (root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:

@@ -5,6 +5,7 @@
   "devDependencies": {
     "vitest": "5.0.3",
     "@vitest/coverage-v8": "5.0.3",
-    "fast-check": "^3.0.0"
+    "fast-check": "^3.0.0",
+    "typescript": "5.9.3"
   }
 }

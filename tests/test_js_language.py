@@ -39,25 +39,20 @@ def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if shutil.which("npm") is None and not CI:
         pytest.skip("npm not installed")
     d = tmp_path_factory.mktemp("jsdeps")
-    (d / "package.json").write_text(json.dumps({"name": "deps", "private": True, "type": "module"}))
+    # the example's lockfile pins vitest, coverage-v8, fast-check and typescript;
+    # `npm ci` from it is reproducible where an ad-hoc `npm install` is not (npm 10)
+    example = Path(__file__).resolve().parent.parent / "examples" / "discount-js"
+    for name in ("package.json", "package-lock.json"):
+        shutil.copy2(example / name, d / name)
     proc = subprocess.run(
-        [
-            "npm",
-            "install",
-            "--no-audit",
-            "--no-fund",
-            "vitest@5.0.3",
-            "@vitest/coverage-v8@5.0.3",
-            "fast-check@3",
-            "typescript@5",
-        ],
+        ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=d,
         capture_output=True,
         text=True,
         check=False,
     )
     if proc.returncode != 0:
-        (pytest.fail if CI else pytest.skip)(f"npm install failed: {proc.stderr[-300:]}")
+        (pytest.fail if CI else pytest.skip)(f"npm ci failed: {proc.stderr[-300:]}")
     return d
 
 

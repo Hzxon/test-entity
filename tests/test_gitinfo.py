@@ -78,15 +78,31 @@ def test_changed_lines_single_line_hunk_without_count(repo: Path) -> None:
     assert by_path(gitinfo.changed_lines(repo, "main")) == {"pkg/b.py": {1}}
 
 
-def test_changed_lines_only_py_files(repo: Path) -> None:
-    (repo / "notes.txt").write_text("changed\n")
-    assert gitinfo.changed_lines(repo, "main") == []
+def test_changed_lines_every_language(repo: Path) -> None:
+    (repo / "notes.txt").write_text("changed\n")  # notes.txt is tracked at the base
+    (repo / "pkg" / "m.js").write_text("export const x = 1;\n")
+    assert by_path(gitinfo.changed_lines(repo, "main")) == {"notes.txt": {1}, "pkg/m.js": {1}}
 
 
-def test_changed_lines_untracked_py_all_lines(repo: Path) -> None:
+def test_changed_lines_untracked_all_lines(repo: Path) -> None:
     (repo / "pkg" / "new.py").write_text("a = 1\nb = 2\nc = 3\n")
-    (repo / "pkg" / "new.txt").write_text("ignored\n")
-    assert by_path(gitinfo.changed_lines(repo, "main")) == {"pkg/new.py": {1, 2, 3}}
+    (repo / "pkg" / "new.txt").write_text("also counted\n")
+    assert by_path(gitinfo.changed_lines(repo, "main")) == {
+        "pkg/new.py": {1, 2, 3},
+        "pkg/new.txt": {1},
+    }
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    ["*.py binary\n", "*.py -diff\n", "*.py diff=hide\n[attr]x -text\n"],
+)
+def test_gitattributes_cannot_hide_changed_lines(repo: Path, attributes: str) -> None:
+    (repo / ".gitattributes").write_text(attributes)
+    subprocess.run(["git", "config", "diff.hide.textconv", "true"], cwd=repo, check=True)
+    (repo / "pkg" / "b.py").write_text("x = 99\n")
+    got = by_path(gitinfo.changed_lines(repo, "main"))
+    assert got["pkg/b.py"] == {1}
 
 
 def test_changed_lines_deleted_file_skipped(repo: Path) -> None:

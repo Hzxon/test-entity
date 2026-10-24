@@ -165,3 +165,28 @@ def test_run_coverage_failing_tests_still_returns_data(make_sb) -> None:
     assert not run.ok
     assert run.failed == 1
     assert cov.covered["src/tiny/mod.py"] == {1, 2, 3}
+
+
+def test_coverage_counts_pragma_no_cover_lines(tmp_path: Path) -> None:
+    root = tmp_path / "proj"
+    pkg = root / "src" / "tiny"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text(
+        "def f(x):\n    if x > 0:  # pragma: no cover\n        return 1\n    return 2\n"
+    )
+    golden = root / "tests" / "golden"
+    golden.mkdir(parents=True)
+    (golden / "test_f.py").write_text(
+        "from tiny.mod import f\n\ndef test_f():\n    assert f(-1) == 2\n"
+    )
+    cfg = ProjectConfig(root=root, package="src/tiny", import_name="tiny")
+    sb = build_sandbox(cfg, sys.executable, {"golden": golden})
+    PythonLanguage().prepare_sandbox(sb, cfg, root)
+    try:
+        _, data = runner.run_coverage(sb, ["golden"], 60, None, sb.root, "src/tiny")
+    finally:
+        destroy(sb)
+    # #64: the pragma'd branch is still a statement, so it shows up as uncovered
+    assert {2, 3} <= data.statements["src/tiny/mod.py"]
+    assert 3 not in data.covered["src/tiny/mod.py"]

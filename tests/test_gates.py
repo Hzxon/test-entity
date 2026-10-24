@@ -885,3 +885,37 @@ def test_coverage_ignores_changes_outside_the_package(tmp_path: Path, fakes: Fak
     ctx = make_ctx(tmp_path, changed=[ChangedFile("docs/x.py", {1})])
     fakes.coverage = (tr(), cov({}, {}))
     assert gates.gate_coverage(ctx).status is Status.PASS
+
+
+# --- changed lines cannot hide from coverage (#64) --------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "x = 1  # pragma: no cover",
+        "x = 1  # PRAGMA: NO COVER",
+        "if x:  # pragma: no branch",
+        "/* v8 ignore next */",
+        "/* c8 ignore start */",
+        "/* istanbul ignore if */",
+    ],
+)
+def test_hygiene_fails_coverage_exclusion_on_changed_line(tmp_path: Path, line: str) -> None:
+    write(tmp_path, "src/pkg/a.py", f"y = 0\n{line}\n")
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("src/pkg/a.py", {2})])
+    result = gates.gate_hygiene(ctx)
+    assert result.status is Status.FAIL
+    assert any(f.startswith("src/pkg/a.py:2: coverage") for f in result.public["findings"])
+
+
+def test_hygiene_ignores_exclusion_on_unchanged_line(tmp_path: Path) -> None:
+    write(tmp_path, "src/pkg/a.py", "x = 1  # pragma: no cover\ny = 2\n")
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("src/pkg/a.py", {2})])
+    assert gates.gate_hygiene(ctx).status is Status.PASS
+
+
+def test_hygiene_without_git_checks_every_line(tmp_path: Path) -> None:
+    write(tmp_path, "src/pkg/a.py", "x = 1  # pragma: no cover\n")
+    ctx = make_ctx(tmp_path)
+    assert gates.gate_hygiene(ctx).status is Status.FAIL

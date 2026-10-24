@@ -50,6 +50,13 @@ _IMPORT_GOLDEN_HIDDEN = re.compile(
     r"|from\s+tests\s+import\s+.*\b(?:golden|hidden)\b)"
 )
 MAX_UNCOVERED_PER_FILE = 20
+
+# Patterns that FAIL hygiene when a changed line adds them (all lines under --no-git).
+# Coverage exclusions hide a line from coverage and from mutation (#64).
+CHANGED_LINE_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"pragma:\s*no\s*(?:cover|branch)", re.IGNORECASE), "coverage exclusion pragma"),
+    (re.compile(r"\b(?:v8|c8|istanbul)\s+ignore\b", re.IGNORECASE), "coverage ignore hint"),
+]
 # Stands in for the output of any run that included hidden tests (#51): pytest and
 # vitest print node ids, file paths and assertion source, and the job log, the
 # private log and every report are readable by the author of the change.
@@ -192,16 +199,23 @@ def gate_hygiene(ctx: RunContext) -> GateResult:
             add(_posix(root, path), None, f"only {lang.test_glob} files are allowed in auto")
 
     scanned = sorted({*auto_files, *_source_files(root, cfg.package, lang.source_suffixes)})
+    changed_by_path = {c.path: c.lines for c in ctx.changed}
     for path in scanned:
         rel = _posix(root, path)
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
+        # without git every line counts as changed
+        changed_lines = changed_by_path.get(rel, set()) if ctx.changed else None
         for no, text in enumerate(lines, 1):
             for token in tokens:
                 if token in text:
                     add(rel, no, f"forbidden reference {token}")
+            if changed_lines is None or no in changed_lines:
+                for pattern, reason in CHANGED_LINE_RULES:
+                    if pattern.search(text):
+                        add(rel, no, reason)
             if path not in auto_set and _IMPORT_TESTS.match(text):
                 add(rel, no, "package imports from a test dir")
             if path in auto_set and _IMPORT_GOLDEN_HIDDEN.match(text):

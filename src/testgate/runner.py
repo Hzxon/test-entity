@@ -247,7 +247,12 @@ def run_coverage(
     (``<root>/src/<import_name>``, the Python adapter's package_dest).
     """
     rc = sb.root / ".coveragerc"
-    rc.write_text(f"[run]\ndata_file = {sb.root / '.coverage'}\n", encoding="utf-8")
+    # Empty exclusion lists: no "# pragma: no cover" can drop a line from coverage
+    # and with it from mutation (#64).
+    rc.write_text(
+        f"[run]\ndata_file = {sb.root / '.coverage'}\n[report]\nexclude_lines =\nexclude_also =\n",
+        encoding="utf-8",
+    )
     rcfile = f"--rcfile={rc}"
     argv = [
         sb.python, "-m", "coverage", "run", rcfile, "--source=src",

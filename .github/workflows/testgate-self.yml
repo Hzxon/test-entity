@@ -1,18 +1,23 @@
 # Proves the action on every PR: the honest example must PASS, the cheat
 # example must FAIL. The hidden tests live in-repo here only because this is
-# the self-test; real projects keep them outside the repository.
+# the self-test; real projects keep them outside the repository. This job runs
+# the PR's own action.yml, so it must never reference a secret (#47).
 name: testgate-self
 
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   honest-passes:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: gate
         uses: ./
         with:
@@ -20,16 +25,17 @@ jobs:
           base: origin/${{ github.base_ref }}
           hidden-dir: ${{ github.workspace }}/examples/discount-hidden
         env:
-          TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
+          TESTGATE_SEED: public-self-test-seed  # this job runs the PR's own action, so it gets no secrets (#47)
       - name: Verdict must be pass
         run: test "${{ steps.gate.outputs.verdict }}" = "pass"
 
   cheat-fails:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: gate
         uses: ./
         continue-on-error: true
@@ -38,6 +44,6 @@ jobs:
           base: origin/${{ github.base_ref }}
           hidden-dir: ${{ github.workspace }}/examples/discount-hidden
         env:
-          TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
+          TESTGATE_SEED: public-self-test-seed  # this job runs the PR's own action, so it gets no secrets (#47)
       - name: Verdict must be fail
         run: test "${{ steps.gate.outputs.verdict }}" = "fail"

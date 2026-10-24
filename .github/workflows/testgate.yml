@@ -1,33 +1,55 @@
 # testgate gating its own repository. Config comes from testgate.yaml on main;
 # hidden tests come from the private repo Hzxon/testgate-hidden via a
 # read-only deploy key held in the TESTGATE_HIDDEN_SSH_KEY secret.
+#
+# The gate itself runs from the base ref (#47): the PR's own action.yml and
+# src/testgate are under judgement, so they never judge themselves. The secrets
+# live in the `testgate` environment; its required reviewer reads the PR's
+# `.github/**` diff before approving, because the PR still supplies this file.
 name: testgate
 
 on:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: testgate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   testgate:
     runs-on: ubuntu-latest
+    environment: testgate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4  # the hidden suite runs node --check on JS mutants
+      - name: Check out the gate from the base ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .testgate-trusted
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0; the hidden suite runs node --check on JS mutants
         with:
           node-version: 22
 
       - name: Check out hidden tests
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: Hzxon/testgate-hidden
           ref: main  # set explicitly: resolving the default branch needs API access the token lacks
           ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}
           path: .testgate-hidden
+          persist-credentials: false
 
       - name: Run testgate
-        uses: ./
+        uses: ./.testgate-trusted
         with:
           base: origin/${{ github.base_ref }}
           hidden-dir: ${{ github.workspace }}/.testgate-hidden

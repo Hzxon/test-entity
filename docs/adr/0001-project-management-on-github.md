@@ -29,8 +29,12 @@ of truth that drifts from the code.
   0 approving reviews are required. `BACKLOG.md` updates go through a PR too.
 - **testgate itself** is a required check; the verdict is the review.
 - **Hidden tests** live in `Hzxon/testgate-hidden`, protected by a ruleset:
-  PR required, one human approval, no direct pushes. Agents may propose hidden
-  tests; only a human merges them (#23). The gate reads that repo's `main`.
+  PR required, one approving review, no direct pushes (ruleset 25734449).
+  Agents may propose hidden tests, but their identity has no access to that
+  repository (#59): they hand the owner a patch, the owner opens the PR under
+  their own name and merges it through the admin pull-request bypass after
+  reading it (#60). Only a human merges them (#23). The gate reads that repo's
+  `main`.
 - **Self-gate thresholds** ratchet by PR to `main`, judged by the rules on
   `main` at that moment (#24). `testgate.yaml` stays hard-protected, so such
   a PR always fails the `protected` gate by design. Landing it is a human

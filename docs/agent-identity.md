@@ -68,6 +68,9 @@ ruleset edit returns 403, and the fine-grained PAT that used to sit in
 
 ## Hidden-test reviews (#60)
 
-Once agents use this identity, an agent's hidden-test PR has an author other
-than the owner, so the owner can approve it: ruleset 25734449 on
-Hzxon/testgate-hidden requires one approving review, as ADR 0001 says.
+The agent identity cannot see Hzxon/testgate-hidden, so an agent proposes
+hidden tests as a patch in its session. The owner reads it, opens the PR under
+their own name, and merges it. Ruleset 25734449 requires one approving review;
+the owner cannot approve their own PR, so the repository admin role is a
+bypass actor in **pull-request mode**: the owner can merge a reviewed PR, but
+nobody can push to `main` directly. ADR 0001 matches.

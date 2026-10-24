@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from testgate.core import ProjectConfig, Sandbox
@@ -72,6 +74,29 @@ def build_sandbox(
     )
 
 
+# Process groups started by run_in_sandbox and not yet killed, keyed by sandbox root,
+# so destroy() and cli's final reap can kill anything still running (#54).
+_GROUPS: dict[str, set[int]] = {}
+_GROUPS_LOCK = threading.Lock()
+_DRAIN_S = 5
+
+
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _forget(key: str, pgid: int) -> None:
+    with _GROUPS_LOCK:
+        groups = _GROUPS.get(key)
+        if groups is not None:
+            groups.discard(pgid)
+            if not groups:
+                del _GROUPS[key]
+
+
 def run_in_sandbox(
     sb: Sandbox,
     argv: list[str],
@@ -79,23 +104,59 @@ def run_in_sandbox(
     extra_env: dict[str, str] | None = None,
     pass_fds: tuple[int, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
+    """Run argv in its own process group and kill the whole group on every exit path.
+
+    Output goes to unnamed temp files, not pipes, so a child that leaves a process
+    holding stdout open cannot stall the run: once the direct child exits, the group
+    is killed and the files are read.
+    """
     env = {**sb.env, **(extra_env or {})}
-    try:
-        return subprocess.run(
+    key = str(sb.root)
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(
             argv,
-            check=False,
             cwd=sb.root,
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
             pass_fds=pass_fds,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
+        with _GROUPS_LOCK:
+            _GROUPS.setdefault(key, set()).add(proc.pid)
+        timed_out = False
+        try:
+            proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        finally:
+            _kill_group(proc.pid)
+            try:
+                proc.wait(timeout=_DRAIN_S)
+            except subprocess.TimeoutExpired:
+                pass
+            _forget(key, proc.pid)
+        out.seek(0)
+        err.seek(0)
+        stdout = out.read().decode("utf-8", errors="replace")
+        stderr = err.read().decode("utf-8", errors="replace")
+    if timed_out:
         return subprocess.CompletedProcess(
             argv, 124, stdout="", stderr=f"testgate: timed out after {timeout_s}s"
         )
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout=stdout, stderr=stderr)
+
+
+def reap(sb: Sandbox | None = None) -> None:
+    """Kill every process group still registered (for one sandbox, or all)."""
+    with _GROUPS_LOCK:
+        keys = [str(sb.root)] if sb is not None else list(_GROUPS)
+        pgids = [g for k in keys for g in _GROUPS.pop(k, set())]
+    for pgid in pgids:
+        _kill_group(pgid)
 
 
 def destroy(sb: Sandbox) -> None:
+    reap(sb)
     shutil.rmtree(sb.root, ignore_errors=True)

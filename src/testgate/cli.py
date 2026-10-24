@@ -10,7 +10,7 @@ from importlib import resources
 from pathlib import Path
 
 from testgate import config as config_mod
-from testgate import gitinfo
+from testgate import gitinfo, sandbox
 from testgate.core import GateError, RunContext, Status
 from testgate.gates import GATE_ORDER, run_gates
 from testgate.languages import get_language
@@ -223,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
     except GateError as exc:
         print(f"testgate: {exc}", file=sys.stderr)
         return 2
+    finally:
+        sandbox.reap()  # nothing a sandbox child started outlives the run (#54)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from testgate.core import GateError, ProjectConfig, Sandbox
-from testgate.languages.js import JsLanguage
+from testgate.languages.js import TOOLCHAIN_ENV, JsLanguage, trusted_modules
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
@@ -57,7 +58,8 @@ def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def project(tmp_path: Path, jsdeps: Path) -> Path:
+def project(tmp_path: Path, jsdeps: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv(TOOLCHAIN_ENV, str(jsdeps / "node_modules"))
     root = tmp_path / "proj"
     (root / "src").mkdir(parents=True)
     (root / "tests" / "golden").mkdir(parents=True)
@@ -123,11 +125,70 @@ def test_prepare_sandbox_network_on_skips_preload(project: Path, tmp_path: Path)
     assert "NODE_OPTIONS" not in box.env
 
 
-def test_prepare_sandbox_requires_node_modules(project: Path, tmp_path: Path) -> None:
-    (project / "node_modules").unlink()
+def test_prepare_sandbox_requires_a_lockfile(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(TOOLCHAIN_ENV)
     box = make_sandbox(project, tmp_path)
-    with pytest.raises(GateError, match="npm ci"):
+    with pytest.raises(GateError, match="package-lock.json not found"):
         LANG.prepare_sandbox(box, config(project), project)
+
+
+def test_fake_vitest_in_the_change_is_never_run(project: Path, tmp_path: Path) -> None:
+    # The change ships node_modules/vitest that reports success; the sandbox must not use it.
+    (project / "node_modules").unlink()
+    fake = project / "node_modules" / "vitest"
+    fake.mkdir(parents=True)
+    (fake / "vitest.mjs").write_text(
+        'import fs from "fs";\n'
+        "const out = process.argv.find((a) => a.startsWith('--outputFile=')).slice(13);\n"
+        "fs.writeFileSync(out, JSON.stringify({success: true, numTotalTests: 1, numPassedTests: 1, "
+        "numFailedTests: 0, numPendingTests: 0, numTodoTests: 0, numFailedTestSuites: 0, "
+        'numTotalTestSuites: 1, testResults: [{name: "x", status: "passed", '
+        'assertionResults: [{status: "passed", fullName: "x"}]}]}));\n'
+    )
+    (project / "tests" / "golden" / "bad.test.js").write_text(FAILING)
+    box = make_sandbox(project, tmp_path)
+    which = shutil.which("node")
+    assert which is not None
+    box.env["PATH"] = f"{Path(which).parent}:{box.env['PATH']}"
+    LANG.prepare_sandbox(box, config(project), project)
+    assert (box.root / "node_modules").resolve() != (project / "node_modules").resolve()
+    run = LANG.run_tests(box, ["golden"], 120, "s")
+    assert not run.ok
+    assert run.failed == 1
+
+
+EMPTY_LOCK = (
+    '{"name": "p", "lockfileVersion": 3, "requires": true, "packages": {"": {"name": "p"}}}'
+)
+
+
+def test_trusted_modules_install_from_the_base_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if shutil.which("npm") is None:
+        pytest.skip("npm not installed")
+    monkeypatch.delenv(TOOLCHAIN_ENV, raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"name": "p"}')
+    (repo / "package-lock.json").write_text(EMPTY_LOCK)
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    (repo / "package.json").write_text('{"name": "p", "devDependencies": {"evil": "1.0.0"}}')
+    cfg = ProjectConfig(root=repo, package="src", import_name="m.js", language="js")
+    cfg.raw = {"_source": "main"}
+    modules = trusted_modules(cfg, repo)
+    assert modules.is_dir()
+    assert (modules.parent / "package.json").read_text() == '{"name": "p"}'  # the base copy
+    assert not os.access(modules, os.W_OK)  # read-only for the code under test
+    assert trusted_modules(cfg, repo) == modules  # installed once per process
 
 
 def test_auto_file_ok() -> None:
@@ -268,6 +329,7 @@ def test_build_errors_when_tsconfig_but_no_typescript(project: Path, tmp_path: P
         network=False,
     )
     shutil.copytree(bare / "src", box.src_root)
+    os.environ[TOOLCHAIN_ENV] = str(bare / "node_modules")  # restored by the project fixture
     LANG.prepare_sandbox(box, config(bare), bare)
     with pytest.raises(GateError, match="typescript"):
         LANG.build(box, config(bare), 120)

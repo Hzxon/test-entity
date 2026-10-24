@@ -81,6 +81,12 @@ _CHECKED_SUFFIXES = (".js", ".mjs", ".cjs")
 _CHECK_TIMEOUT_S = 30
 
 
+def _toolchain_bind(sb: Sandbox) -> dict[str, bool]:
+    """The trusted node_modules the sandbox links to, mounted read-only under isolation."""
+    link = sb.root / "node_modules"
+    return {str(link.resolve()): False} if link.is_symlink() else {}
+
+
 def _fc_seed(seed: str) -> int:
     return int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16)
 
@@ -133,7 +139,9 @@ class JsLanguage:
         files = sorted(p for p in pkg.rglob("*") if p.is_file() and p.suffix in _CHECKED_SUFFIXES)
         last = _ok(["node", "--check"])
         for f in files:
-            last = run_in_sandbox(sb, ["node", "--check", str(f)], timeout_s)
+            last = run_in_sandbox(
+                sb, ["node", "--check", str(f)], timeout_s, binds=_toolchain_bind(sb)
+            )
             if last.returncode != 0:
                 return last
         tsconfig = sb.root / "tsconfig.json"
@@ -143,7 +151,10 @@ class JsLanguage:
             if not tsc.is_file():
                 raise GateError("typescript is not installed; add it to devDependencies")
             last = run_in_sandbox(
-                sb, ["node", str(tsc), "--noEmit", "-p", str(tsconfig)], timeout_s
+                sb,
+                ["node", str(tsc), "--noEmit", "-p", str(tsconfig)],
+                timeout_s,
+                binds=_toolchain_bind(sb),
             )
         return last
 
@@ -170,6 +181,10 @@ class JsLanguage:
             "--config",
             str(sb.root / "vitest.config.mjs"),
             "--reporter=json",
+            # load the config in memory: bundling it writes node_modules/.vite-temp,
+            # and node_modules is the read-only trusted toolchain (#65, #56)
+            "--configLoader",
+            "runner",
             f"--outputFile={out_file}",
             *extra,
         ]
@@ -179,7 +194,13 @@ class JsLanguage:
         argv.extend(files or [f"tests/{n}/" for n in names])
         t0 = time.monotonic()
         try:
-            proc = run_in_sandbox(sb, argv, timeout_s, {"TESTGATE_FC_SEED": str(_fc_seed(seed))})
+            proc = run_in_sandbox(
+                sb,
+                argv,
+                timeout_s,
+                {"TESTGATE_FC_SEED": str(_fc_seed(seed))},
+                binds={str(out_dir): True, **_toolchain_bind(sb)},
+            )
             duration = time.monotonic() - t0
             try:
                 data = json.loads(out_file.read_text())

@@ -1,8 +1,10 @@
 # testgate
 
-testgate decides whether a change to a Python project is safe to merge. It is built for changes written by AI agents. An agent can edit the code, the tests, the CI config and `testgate.yaml`, so a green test run from the agent's own tests proves little. testgate reads its config from the base ref, fails the run if protected paths changed, keeps hidden tests outside the repo, and keeps the Hypothesis seed in a CI secret.
+testgate decides whether a change to a Python project is safe to merge. It is built for changes written by AI agents. An agent can edit the code, the tests, the CI config and `testgate.yaml`, so a green test run from the agent's own tests proves little. testgate reads its config from the base ref, fails the run if protected paths changed, keeps hidden tests outside the repo, and keeps the seed in a CI secret that never reaches the code under test.
 
-The gates run in order: protected, hygiene, build, tests, hidden, coverage, mutation. Every pytest run happens in a fresh temp root that holds only the package and the chosen test dirs, with `--noconftest`, a scrubbed environment and blocked sockets. The public report has counts, scores and file:line only. Assertion text, hidden test names and the seed go to a private log.
+The gates run in order: protected, hygiene, build, tests, hidden, coverage, mutation. Every test run happens in a fresh temp root that holds only the package and the chosen test dirs, with `--noconftest` and a scrubbed environment; on Linux with bubblewrap it also runs without network and without a view of the home dir or the checkout. Without bubblewrap the network block is best-effort (see Limits). The public report has counts, scores and file:line only. Runs that include hidden tests are redacted even in the private log, which is never uploaded.
+
+Read the threat model, what the sandbox does not guarantee and the owner's duties in [CONTRACT.md](CONTRACT.md#threat-model) before relying on the gate.
 
 ## Install
 
@@ -14,10 +16,10 @@ pip install .
 
 ## Quick start
 
-1. Run `testgate init` in your project. It writes `testgate.yaml`, a golden test example and a workflow.
+1. Run `testgate init --action OWNER/testgate@<full commit sha>` in your project. It writes `testgate.yaml`, a golden test example and a locked-down workflow (it refuses tags such as `@v0`).
 2. Write golden tests in `tests/golden`. They are protected: a change to them fails the run.
 3. Create a separate repo with hidden tests. They use the same rules as the golden tests with different values and names. In CI, check it out into `.testgate-hidden`, or set `TESTGATE_HIDDEN_DIR`.
-4. Set `TESTGATE_SEED` as a CI secret.
+4. Create the environment `testgate` with yourself as required reviewer and set `TESTGATE_SEED` (`openssl rand -hex 32`) and the hidden-repo secrets there, never at repository level.
 5. Add the `testgate` check as required on the main branch.
 
 Run it locally with `testgate run --base origin/main`, or `testgate run --no-git` for a project that is not a git repo. `testgate mutants` lists the mutants that would be generated.
@@ -42,23 +44,54 @@ Hidden tests live outside the repo. The path comes from `hidden:` in `testgate.y
 
 ## GitHub Action
 
+`testgate init` writes the full workflow. Its core:
+
 ```yaml
-- uses: actions/checkout@v4
-  with:
-    fetch-depth: 0
-- uses: actions/checkout@v4
-  with:
-    repository: ${{ secrets.TESTGATE_HIDDEN_REPO }}
-    ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}  # read-only deploy key of the hidden repo
-    path: .testgate-hidden
-- uses: OWNER/testgate@v0
-  env:
-    TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
-  with:
-    base: origin/${{ github.base_ref }}
+permissions:
+  contents: read
+jobs:
+  testgate:
+    environment: testgate  # holds the secrets; its reviewer reads .github/** diffs first
+    steps:
+      - uses: actions/checkout@<sha>  # pin every action by full commit SHA
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@<sha>
+        with:
+          repository: ${{ secrets.TESTGATE_HIDDEN_REPO }}
+          ssh-key: ${{ secrets.TESTGATE_HIDDEN_SSH_KEY }}  # read-only deploy key of the hidden repo
+          path: .testgate-hidden
+          persist-credentials: false
+      - uses: OWNER/testgate@<full commit sha>
+        env:
+          TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
+        with:
+          base: origin/${{ github.base_ref }}
 ```
 
 The action sets the `verdict` output. It never uploads `testgate-private.log`: artifacts and job logs are readable by the author of the change, so the private log stays on the runner, and runs that include hidden tests are redacted even there (no hidden test names, paths or assertion text).
+
+## Reviewing agent PRs
+
+A branch written by an agent is untrusted input on your machine too. A trusted
+Claude Code folder loads the branch's `.claude/settings.json` hooks,
+`.mcp.json`, `CLAUDE.md` and `AGENTS.md` on checkout, and `uv run` builds the
+project through the branch's `pyproject.toml` `[build-system]`.
+
+- Check PR branches out only in a disposable worktree outside trusted folders:
+  `scripts/review-branch <pr-number | branch>` does that under `$TMPDIR` with
+  checkout hooks off, and lists the changed files that alter tool behaviour so
+  you read them first.
+- Install with `uv sync --locked --no-install-project --no-build`
+  (`scripts/review-branch <pr> --sync`): no build backend, no sdist builds.
+- Never run `testgate run` on an untrusted branch outside OS isolation;
+  `scripts/review-branch <pr> --run` refuses without bubblewrap on Linux.
+- Keep the hidden-tests clone out of `~/dev` and away from gated repos: a local
+  run gives the code under test read access to everything the user can read.
+- The self-gate's `protected` list covers `.claude/**`, `.mcp.json`,
+  `CLAUDE.md`, `AGENTS.md`, `pyproject.toml` and `uv.lock`, so a PR that edits
+  them fails until the owner lands it through the bypass ceremony.
 
 ## Languages
 
@@ -78,15 +111,16 @@ HTTP mode (ADR 0002) starts the service from `http.start` with `{port}` substitu
 
 `expect` also takes `headers`, `text` (substring) and `schema` (JSON Schema). `examples/shop-http` and `examples/shop-http-cheat` are the HTTP pair: a stdlib `http.server` shop that needs nothing installed. `http.start` may also be `{compose: compose.yaml, service: shop, port: 8000}`: testgate runs `docker compose up -d --build` in the sandbox copy, asks compose for the published host port, and tears the project down afterwards (`examples/shop-http-compose`). The network block is best effort for the service process: proxy variables point at a dead port, and the sandbox cannot stop a service that ignores them.
 
-JS sandboxes symlink the project's `node_modules`, copy `package.json`, and block the network with a `--require` preload (`localhost` DNS stays allowed so vitest can start). Hidden tests import sources as if they lived in `tests/hidden/` of the project.
+JS sandboxes never use the project's own `node_modules`: testgate runs `npm ci --ignore-scripts` from the base ref's `package.json` and `package-lock.json` into a directory it owns, makes it read-only and links the sandbox to it (or uses `TESTGATE_JS_TOOLCHAIN`, a node_modules dir the workflow already trusts). Sandboxes copy `package.json` and block the network with a `--require` preload (`localhost` DNS stays allowed so vitest can start). Hidden tests import sources as if they lived in `tests/hidden/` of the project.
 
 ## Limits
 
-- Languages: Python (pytest, Hypothesis, AST mutator) and JavaScript/TypeScript (vitest, fast-check, a line-based textual mutator; `node --check` validates each mutant; with a `tsconfig.json` the build gate also runs `tsc --noEmit`, so `typescript` must be a devDependency). Set `language: js` in `testgate.yaml`; the project must have run `npm ci` before the gate runs, and needs `vitest` and `@vitest/coverage-v8` in devDependencies.
+- Languages: Python (pytest, Hypothesis, AST mutator) and JavaScript/TypeScript (vitest, fast-check, a line-based textual mutator; `node --check` validates each mutant; with a `tsconfig.json` the build gate also runs `tsc --noEmit`, so `typescript` must be a devDependency). Set `language: js` in `testgate.yaml`; the base ref needs a `package-lock.json` with `vitest` and `@vitest/coverage-v8` in devDependencies.
 - Mutation testing runs golden + hidden once per mutant. Runs are parallel (`mutation.jobs`, default half the CPUs); use `max_mutants` and `timeout_s` to bound large changes.
 - Baseline coverage comparison needs a base ref; `--no-git` runs only check the fixed thresholds. Changed-line coverage is checked against a fixed threshold.
-- The sandbox is a subprocess with a scrubbed environment and blocked sockets. It is not a container.
+- On Linux with bubblewrap (the action installs it on ubuntu runners), every sandbox child runs under `bwrap`: no network namespace unless `sandbox.network: true`, the host read-only, the real home, the checkout (with the hidden tests and `.git/config`), `/tmp` and the runner's temp and work dirs replaced by empty tmpfs, and only the sandbox root writable. The report says `isolation: bwrap`. Elsewhere the sandbox is a subprocess with a scrubbed environment and a Python/Node socket block, which code can bypass; the report says `isolation: best-effort`, and `sandbox.require_isolation: true` turns that into a FAIL. HTTP services share the host network, because testgate's fixture client runs outside the namespace.
 - HTTP mode: route coverage and the differential gate need `http.openapi` (a document inside the package); without it the coverage gate reports 100% and the differential gate is skipped. The OpenAPI document is read from the base ref: a change may add routes (they count as changed), but its edits to existing route definitions are ignored and flagged as `spec_changed` for a human, so a change cannot exempt a route from the differential gate by touching the spec. The differential gate only sees routes that fixtures exercise. Services with their own containers run through the compose form. The compose file and every Dockerfile in the package come from the base ref, and the build gate refuses `privileged`, `cap_add`, `devices`, `network_mode`, service `networks`, `extends`, host `pid`/`ipc`/`uts`/`userns_mode`/`cgroup`, unconfined `security_opt`, bind mounts outside the package, any Docker socket mount, volume `driver_opts`, and ports other than the configured one. testgate adds an override that puts helper services on an internal network with no egress; the service under test also joins the default network, which its published port needs, so its own egress is not blocked.
+- Hidden tests run in the same interpreter as the code under test, so in-process code can introspect them while they run. OS isolation stops exfiltration, not introspection. HTTP black-box mode keeps hidden fixtures in testgate's own process and is the stronger option.
 - Equivalent mutants are reduced by rules (Python: clamps, message-only constants, dead assignments; JS: message-only strings in throw/format/bare calls), not detected in general. A survivor can still be equivalent; read the `before`/`after` text before adding a test.
 
 ## Credits

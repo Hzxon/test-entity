@@ -23,18 +23,35 @@ runs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
       with:
         python-version: ${{ inputs.python-version }}
-    - name: Install testgate
+    - name: Install bubblewrap
+      # OS isolation for sandbox children (#56); without it the report says best-effort
+      if: runner.os == 'Linux'
       shell: bash
-      run: pip install "${{ github.action_path }}"
+      run: |
+        command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; } || true
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
+        bwrap --ro-bind / / --unshare-net true 2>/dev/null \
+          || sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+    - name: Install testgate
+      # dependencies from a hashed lock; testgate itself runs from the action's source
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: python -m pip install --quiet --require-hashes --no-deps -r "$ACTION_PATH/requirements.lock"
     - name: Run testgate
       id: run
       shell: bash
       continue-on-error: false
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        INPUT_ROOT: ${{ inputs.root }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_HIDDEN_DIR: ${{ inputs.hidden-dir }}
       run: >
-        testgate run
-        --root "${{ inputs.root }}"
-        --base "${{ inputs.base }}"
-        --hidden "${{ inputs.hidden-dir }}"
+        PYTHONPATH="$ACTION_PATH/src" python -m testgate.cli run
+        --root "$INPUT_ROOT"
+        --base "$INPUT_BASE"
+        --hidden "$INPUT_HIDDEN_DIR"
         --json testgate.json
         --private-log testgate-private.log
     - name: Read verdict

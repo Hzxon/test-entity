@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "vitest": "^3.0.0",
-    "@vitest/coverage-v8": "^3.0.0",
-    "fast-check": "^3.0.0"
+    "vitest": "5.0.3",
+    "@vitest/coverage-v8": "5.0.3",
+    "fast-check": "^3.0.0",
+    "typescript": "5.9.3"
   }
 }

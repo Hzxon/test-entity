@@ -117,9 +117,9 @@ def test_hypothesis_seed_flag_added_and_cached(make_sb, monkeypatch: pytest.Monk
     seen: list[list[str]] = []
     orig = runner.run_in_sandbox
 
-    def spy(box, argv, timeout_s, extra_env=None, pass_fds=()):
+    def spy(box, argv, timeout_s, extra_env=None, **kw):
         seen.append(argv)
-        return orig(box, argv, timeout_s, extra_env, pass_fds)
+        return orig(box, argv, timeout_s, extra_env, **kw)
 
     monkeypatch.setattr(runner, "run_in_sandbox", spy)
     r = runner.run_pytest(sb, ["golden"], 60, "1234")

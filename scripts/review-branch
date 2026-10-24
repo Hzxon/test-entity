@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Check out an agent's PR or branch for review without letting it run anything.
+#
+#   scripts/review-branch <pr-number | branch> [--sync] [--run]
+#
+# The branch goes into a throwaway worktree under $TMPDIR, outside any folder
+# Claude Code or another agent trusts, so its .claude/settings.json hooks,
+# .mcp.json, CLAUDE.md and AGENTS.md are never loaded. Nothing from the branch
+# runs unless asked:
+#   --sync  uv sync --locked --no-install-project --no-build (no build backend,
+#           no sdist builds, only wheels the lockfile pins)
+#   --run   testgate run against the base ref, only under OS isolation (bwrap)
+# Remove the worktree with: git worktree remove --force <path>
+set -euo pipefail
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+[ $# -ge 1 ] || usage 2
+case "$1" in -h|--help) usage 0 ;; esac
+
+target=$1; shift
+sync=0; run=0
+for arg in "$@"; do
+  case "$arg" in
+    --sync) sync=1 ;;
+    --run) run=1 ;;
+    *) echo "review-branch: unknown option $arg" >&2; usage 2 ;;
+  esac
+done
+
+repo=$(git rev-parse --show-toplevel)
+base=${REVIEW_BASE:-origin/main}
+if [[ $target =~ ^[0-9]+$ ]]; then
+  ref="refs/review/pr-$target"
+  git -C "$repo" fetch --quiet origin "pull/$target/head:$ref"
+else
+  ref="refs/review/$target"
+  git -C "$repo" fetch --quiet origin "$target:$ref"
+fi
+git -C "$repo" fetch --quiet origin
+
+dir=$(mktemp -d "${TMPDIR:-/tmp}/testgate-review-XXXXXX")
+case "$dir" in
+  "$HOME/dev"*|"$repo"*) echo "review-branch: $dir is inside a trusted folder" >&2; exit 1 ;;
+esac
+# no checkout hooks, no filters from the branch's .gitattributes
+git -C "$repo" -c core.hooksPath=/dev/null worktree add --quiet --detach "$dir" "$ref"
+echo "worktree: $dir"
+
+echo
+echo "Files that change how tools behave (read these first):"
+git -C "$dir" diff --stat "$base"...HEAD -- \
+  .github .claude .mcp.json CLAUDE.md AGENTS.md pyproject.toml uv.lock \
+  action.yml testgate.yaml tests/golden package.json package-lock.json || true
+
+if [ "$sync" = 1 ]; then
+  (cd "$dir" && uv sync --locked --no-install-project --no-build)
+fi
+
+if [ "$run" = 1 ]; then
+  if ! command -v bwrap >/dev/null || [ "$(uname -s)" != Linux ]; then
+    echo "review-branch: refusing --run without OS isolation (bubblewrap on Linux)" >&2
+    exit 1
+  fi
+  echo "testgate from $repo (your checkout), judging $dir"
+  (cd "$dir" && uv run --project "$repo" --locked python -m testgate.cli run --base "$base" \
+    --json "$dir/testgate.json")
+fi

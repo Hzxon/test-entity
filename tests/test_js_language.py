@@ -14,7 +14,11 @@ import pytest
 from testgate.core import GateError, ProjectConfig, Sandbox
 from testgate.languages.js import TOOLCHAIN_ENV, JsLanguage, trusted_modules
 
-pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+# In CI a missing toolchain is a failure, not a skip (#72).
+CI = bool(os.environ.get("CI"))
+pytestmark = pytest.mark.skipif(
+    not CI and shutil.which("node") is None, reason="node not installed"
+)
 
 LANG = JsLanguage()
 
@@ -32,28 +36,23 @@ NET = (
 
 @pytest.fixture(scope="session")
 def jsdeps(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    if shutil.which("npm") is None:
+    if shutil.which("npm") is None and not CI:
         pytest.skip("npm not installed")
     d = tmp_path_factory.mktemp("jsdeps")
-    (d / "package.json").write_text(json.dumps({"name": "deps", "private": True, "type": "module"}))
+    # the example's lockfile pins vitest, coverage-v8, fast-check and typescript;
+    # `npm ci` from it is reproducible where an ad-hoc `npm install` is not (npm 10)
+    example = Path(__file__).resolve().parent.parent / "examples" / "discount-js"
+    for name in ("package.json", "package-lock.json"):
+        shutil.copy2(example / name, d / name)
     proc = subprocess.run(
-        [
-            "npm",
-            "install",
-            "--no-audit",
-            "--no-fund",
-            "vitest@3",
-            "@vitest/coverage-v8@3",
-            "fast-check@3",
-            "typescript@5",
-        ],
+        ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=d,
         capture_output=True,
         text=True,
         check=False,
     )
     if proc.returncode != 0:
-        pytest.skip(f"npm install failed: {proc.stderr[-300:]}")
+        (pytest.fail if CI else pytest.skip)(f"npm ci failed: {proc.stderr[-300:]}")
     return d
 
 
@@ -167,7 +166,7 @@ EMPTY_LOCK = (
 def test_trusted_modules_install_from_the_base_ref(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if shutil.which("npm") is None:
+    if shutil.which("npm") is None and not CI:
         pytest.skip("npm not installed")
     monkeypatch.delenv(TOOLCHAIN_ENV, raising=False)
     repo = tmp_path / "repo"
@@ -239,9 +238,9 @@ def test_fail_fast_adds_bail(sb: Sandbox, monkeypatch: pytest.MonkeyPatch) -> No
     seen: list[list[str]] = []
     real = js.run_in_sandbox
 
-    def spy(box: Sandbox, argv: list[str], timeout_s: int, extra_env: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
+    def spy(box: Sandbox, argv: list[str], timeout_s: int, extra_env=None, **kw):  # type: ignore[no-untyped-def]
         seen.append(argv)
-        return real(box, argv, timeout_s, extra_env)
+        return real(box, argv, timeout_s, extra_env, **kw)
 
     monkeypatch.setattr(js, "run_in_sandbox", spy)
     LANG.run_tests(sb, ["golden"], 120, "s", fail_fast=True)

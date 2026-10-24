@@ -14,8 +14,10 @@ surface hashed, `--noconftest`, pass/fail-only feedback to the author).
 
 ## Threat model
 
-The author can edit anything in the working tree, including tests, CI config
-and `testgate.yaml`. The gates stay honest because:
+The author of the change (usually an AI agent) can edit anything in the
+working tree, including tests, CI config, `testgate.yaml`, the workflow file
+and testgate's own source when testgate gates itself. The gates stay honest
+because:
 
 1. `testgate.yaml` and the list of protected paths are read from the **base
    ref** (`git show <base>:testgate.yaml`), never from the working tree.
@@ -26,11 +28,52 @@ and `testgate.yaml`. The gates stay honest because:
    per-run seed is used and the report says `seed_is_secret: false`. The secret
    never enters a sandbox: each gate gets `HMAC-SHA256(seed, head SHA + gate)`
    (`gates.derive_seed`), so a leaked derived seed predicts nothing on another head.
-5. Every pytest run happens in a **fresh temp root** containing only the
-   package and the chosen test dirs, with `--noconftest -p no:cacheprovider`,
-   a scrubbed environment, and sockets blocked unless `network: true`.
-6. The public report shows **counts, scores and file:line only**. Assertion
-   text, hidden test names and the seed go to the private log.
+5. Every test run happens in a **fresh temp root** containing only the
+   package and the chosen test dirs, with `--noconftest -p no:cacheprovider`
+   and a scrubbed environment. The verdict comes from a runner-owned result
+   channel, never from the child's exit code.
+6. The public report shows **counts, scores and file:line only**. Runs that
+   include hidden tests are redacted everywhere, the private log included, and
+   the private log is never uploaded.
+7. The workflow runs the gate from the base ref (`uses: ./.testgate-trusted`
+   for the self-gate, a SHA-pinned action for consumers), inside the
+   `testgate` environment that holds the secrets.
+
+### What the sandbox does not guarantee
+
+- **Isolation is best-effort without bubblewrap.** With `bwrap` on Linux
+  (`isolation: bwrap` in the report) children get no network namespace, a
+  read-only host and no view of the home dir, the checkout or the runner's
+  temp dirs. Without it (`isolation: best-effort`) the env scrub and the
+  Python/Node socket block are all there is: code can bypass the block
+  (`_socket`, `python -I`, `subprocess` + `curl`) and read any file the runner
+  user can. Set `sandbox.require_isolation: true` to FAIL instead.
+- **Hidden tests run in the same interpreter as the code under test.** In-process
+  code can introspect them (frames, `gc`, `sys.modules`) while they run.
+  Isolation stops exfiltration, not introspection; the hygiene gate only flags
+  the obvious patterns on changed lines. HTTP black-box mode is the stronger
+  option: hidden fixtures stay in testgate's process and only HTTP reaches the
+  service.
+- **HTTP services share the host network**, because testgate's fixture client
+  runs outside the namespace. Compose services run on the runner's Docker
+  daemon; the compose file and Dockerfiles come from the base ref and host
+  escapes are refused, but the service under test keeps egress.
+- **Read-only is file permissions without bubblewrap.** The JS toolchain and
+  the result channel are runner-owned, yet the code under test runs as the same
+  user.
+
+### The owner's duties
+
+- Keep the secrets (`TESTGATE_SEED`, the hidden-repo deploy key) in the
+  `testgate` environment with yourself as required reviewer, never at
+  repository level.
+- Before approving a gate run, read the PR's `.github/**` diff: the PR
+  supplies the workflow file that runs the gate.
+- Merge hidden-test PRs yourself; agents only propose them.
+- Land protected-path changes (`testgate.yaml`, golden tests, workflows) only
+  through the bypass ceremony in ADR 0001, after reading them.
+- Give agents their own non-admin identity, so no repository setting is a
+  boundary they can lift.
 
 ## Layout
 
@@ -85,6 +128,7 @@ sandbox:
   network: false
   timeout_s: 600
   python: null
+  require_isolation: false   # true: FAIL when bubblewrap is unavailable (#56)
 ```
 - A gate value may be a bool or a mapping with `enabled` plus that gate's options. Map options onto the flat `ProjectConfig` fields.
 - Allowed imports: `core`, `gitinfo`.

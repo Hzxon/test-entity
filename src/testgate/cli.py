@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets
 import sys
 from importlib import resources
@@ -11,18 +12,22 @@ from pathlib import Path
 
 from testgate import config as config_mod
 from testgate import gitinfo, sandbox
-from testgate.core import GateError, RunContext, Status
+from testgate.core import GateError, GateResult, RunContext, Status
 from testgate.gates import GATE_ORDER, run_gates
 from testgate.languages import get_language
 from testgate.report import build_report, to_markdown, write_outputs
 
 NEXT_STEPS = """\
 Next steps:
-  1. Set the TESTGATE_SEED secret in your CI (any random string); it fixes the Hypothesis seed.
-  2. Create the private hidden tests repo, add a read-only deploy key, and set the
-     TESTGATE_HIDDEN_REPO and TESTGATE_HIDDEN_SSH_KEY secrets.
-  3. Protect main with the "testgate" required check.
+  1. Create the environment "testgate" with yourself as required reviewer. Every gate
+     run waits for you; read the PR's .github/** diff before approving it.
+  2. Set TESTGATE_SEED as an environment secret (`openssl rand -hex 32`), not a repo secret.
+  3. Create the private hidden tests repo, add a read-only deploy key, and set the
+     TESTGATE_HIDDEN_REPO and TESTGATE_HIDDEN_SSH_KEY environment secrets.
+  4. Protect main with the "testgate" required check.
 """
+PLACEHOLDER_ACTION = "<owner>/testgate@<full-sha>"
+_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}$")
 
 
 def _template(name: str) -> str:
@@ -30,6 +35,10 @@ def _template(name: str) -> str:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
+    action = args.action or PLACEHOLDER_ACTION
+    if args.action and not _ACTION.match(args.action):
+        # a tag or branch lets whoever moves it pick the gate's code
+        raise GateError(f"--action must be owner/repo@<40-hex commit sha>, got {args.action!r}")
     js = args.language == "js"
     if js:
         package = args.package or "src"
@@ -59,7 +68,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         (root / "testgate.yaml", config_text),
         (root / example[0], example[1]),
         (root / "tests/auto/.gitkeep", ""),
-        (root / ".github/workflows/testgate.yml", _template("testgate.yml")),
+        (
+            root / ".github/workflows/testgate.yml",
+            _template("testgate.yml").replace("__ACTION__", action),
+        ),
     ]
     existing = [t for t, _ in targets if t.exists()]
     if existing and not args.force:
@@ -71,6 +83,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         print(f"wrote {path.relative_to(root)}")
+    if action == PLACEHOLDER_ACTION:
+        print(f"Replace {PLACEHOLDER_ACTION} in the workflow with a full commit SHA.")
     print(NEXT_STEPS, end="")
     return 0
 
@@ -127,8 +141,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         language=get_language(cfg.language),
         head="" if no_git else gitinfo.head_sha(root),
     )
-    results = run_gates(ctx, only)
+    isolated = sandbox.isolation_available()
+    if cfg.require_isolation and not isolated:
+        # sandbox.require_isolation: no gate runs without OS isolation (#56)
+        results = [
+            GateResult(
+                "isolation",
+                Status.FAIL,
+                "OS isolation required (sandbox.require_isolation) but bubblewrap is unavailable",
+            ),
+            *(GateResult(g, Status.SKIP, "skipped: no OS isolation") for g in GATE_ORDER),
+        ]
+    else:
+        results = run_gates(ctx, only)
     report = build_report(ctx, results)
+    report.isolation = "bwrap" if isolated else "best-effort"
     if not args.quiet:
         print(to_markdown(report))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -193,6 +220,7 @@ def _parser() -> argparse.ArgumentParser:
         "--language", choices=["python", "js"], default="python", help="project language"
     )
     init.add_argument("--force", action="store_true", help="overwrite existing files")
+    init.add_argument("--action", help="the testgate action to pin, owner/repo@<full commit sha>")
 
     run = sub.add_parser("run", help="run the gates and print the verdict")
     run.add_argument("--root", help="project root (default: current directory)")

@@ -2,23 +2,34 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import os
 import random
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from testgate import gitinfo
 from testgate.core import CoverageData, GateError, Mutant, ProjectConfig, Sandbox, TestRun
 from testgate.sandbox import run_in_sandbox
 
+# A node_modules directory the caller already trusts, used instead of installing one
+# (offline runs, tests). Set it in the workflow, never from the change under test.
+TOOLCHAIN_ENV = "TESTGATE_JS_TOOLCHAIN"
+_INSTALL_TIMEOUT_S = 900
+
 _VITEST_CONFIG = """\
 export default {
+  cacheDir: ".vite-cache",  // inside the sandbox: node_modules is read-only
   test: {
     include: ["tests/**/*.test.*"],
     setupFiles: ["./fc-seed.mjs"],
@@ -93,9 +104,8 @@ class JsLanguage:
         return cfg.package
 
     def prepare_sandbox(self, sb: Sandbox, cfg: ProjectConfig, project_root: Path) -> None:
-        modules = project_root / "node_modules"
-        if not modules.exists():
-            raise GateError(f"node_modules not found in {project_root}; run npm ci first")
+        # Never the change's own node_modules (#65): a PR could ship a fake vitest.
+        modules = trusted_modules(cfg, project_root)
         link = sb.root / "node_modules"
         if not link.is_symlink() and not link.exists():
             link.symlink_to(modules.resolve(), target_is_directory=True)
@@ -505,3 +515,81 @@ def _mutate_line(line: str) -> tuple[str, str] | None:
         indent = line[: len(line) - len(line.lstrip())]
         return "SBR", f"{indent};"
     return None
+
+
+# --- trusted toolchain (#65) -------------------------------------------------
+
+_TOOLCHAINS: dict[str, Path] = {}  # sha256(package.json, lockfile) -> node_modules
+_TOOLCHAIN_LOCK = threading.Lock()
+
+
+def trusted_modules(cfg: ProjectConfig, project_root: Path) -> Path:
+    """node_modules installed by testgate from the base ref's manifest and lockfile.
+
+    The install runs `npm ci --ignore-scripts` into a testgate-owned temp dir, once
+    per manifest per process, and is then made read-only. Without a base ref (first
+    adoption, --no-git) the working tree's files are used, still never its node_modules.
+    """
+    override = os.environ.get(TOOLCHAIN_ENV)
+    if override:
+        path = Path(override)
+        if not path.is_dir():
+            raise GateError(f"{TOOLCHAIN_ENV} is not a directory: {override}")
+        return path
+    source = cfg.raw.get("_source")
+    from_ref = bool(source) and source != "worktree"
+    files: dict[str, str | None] = {}
+    for name in ("package.json", "package-lock.json"):
+        if from_ref:
+            files[name] = gitinfo.show_file(project_root, str(source), name)
+        else:
+            f = project_root / name
+            files[name] = f.read_text(encoding="utf-8") if f.is_file() else None
+    missing = [n for n, text in files.items() if text is None]
+    if missing:
+        where = f"at {source}" if from_ref else "in the project"
+        raise GateError(f"{', '.join(missing)} not found {where}; testgate installs from them")
+    key = hashlib.sha256("\0".join(t or "" for t in files.values()).encode()).hexdigest()
+    with _TOOLCHAIN_LOCK:
+        if key not in _TOOLCHAINS:
+            _TOOLCHAINS[key] = _install(files)
+        return _TOOLCHAINS[key]
+
+
+def _install(files: dict[str, str | None]) -> Path:
+    root = Path(tempfile.mkdtemp(prefix="testgate-node-")).resolve()
+    atexit.register(_remove, root)
+    for name, text in files.items():
+        (root / name).write_text(text or "", encoding="utf-8")
+    argv = ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"]
+    try:
+        proc = subprocess.run(
+            argv, cwd=root, capture_output=True, text=True, check=False, timeout=_INSTALL_TIMEOUT_S
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GateError(f"npm ci failed: {exc}") from exc
+    if proc.returncode != 0:
+        raise GateError(f"npm ci failed: {proc.stderr.strip()[-500:]}")
+    modules = root / "node_modules"
+    modules.mkdir(exist_ok=True)  # npm creates none for a manifest without dependencies
+    _set_writable(modules, False)
+    return modules
+
+
+def _set_writable(path: Path, writable: bool) -> None:
+    """Add or drop write permission on a tree; symlinks are left alone."""
+    bits = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+    for dirpath, dirnames, filenames in os.walk(path):
+        for name in [*filenames, *dirnames]:
+            p = os.path.join(dirpath, name)
+            if not os.path.islink(p):
+                mode = os.stat(p).st_mode
+                os.chmod(p, (mode | stat.S_IWUSR) if writable else (mode & ~bits))
+    mode = os.stat(path).st_mode
+    os.chmod(path, (mode | stat.S_IWUSR) if writable else (mode & ~bits))
+
+
+def _remove(root: Path) -> None:
+    if (root / "node_modules").is_dir():
+        _set_writable(root / "node_modules", True)
+    shutil.rmtree(root, ignore_errors=True)

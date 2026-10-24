@@ -11,7 +11,14 @@ import tempfile
 import threading
 from pathlib import Path
 
-from testgate.core import ProjectConfig, Sandbox
+from testgate.core import (
+    SUITE_TRUST,
+    TRUSTED_SUITES,
+    OracleMode,
+    OracleRoot,
+    ProjectConfig,
+    Sandbox,
+)
 
 
 def _ignore_tests(_dir: str, names: list[str]) -> set[str]:
@@ -32,16 +39,30 @@ def build_sandbox(
     tests: dict[str, Path],
     overrides: dict[str, str] | None = None,
     dest: str | None = None,
+    oracle: OracleMode = OracleMode.PROCESS,
 ) -> Sandbox:
+    """Sandbox root with the package and untrusted suites; trusted suites in their own root.
+
+    The only place that decides where suite files go. When ``oracle`` separates files, no
+    trusted suite (core.SUITE_TRUST) is written under the sandbox root, which is the root
+    a sandbox child gets. The default is the safe placement: a caller that forgets
+    ``oracle`` hides trusted suites from in-process runners, which then fail loudly.
+    """
+    unknown = sorted(set(tests) - set(SUITE_TRUST))
+    if unknown:
+        raise ValueError(f"unknown test suite: {', '.join(unknown)}")
     # resolve(): macOS puts temp dirs behind the /var -> /private/var symlink, and tools that
     # realpath imported files (vitest coverage) would otherwise miss the include glob.
     root = Path(tempfile.mkdtemp(prefix="testgate-")).resolve()
     src_root = root / (dest if dest is not None else f"src/{config.import_name}")
     shutil.copytree(config.root / config.package, src_root, ignore=_ignore_package)
 
+    apart = TRUSTED_SUITES.intersection(tests) if oracle.separates_files else frozenset()
+    oracle_root = Path(tempfile.mkdtemp(prefix="testgate-oracle-")).resolve() if apart else None
     test_dirs: dict[str, Path] = {}
     for name, src in tests.items():
-        dst = root / "tests" / name
+        base = oracle_root if oracle_root is not None and name in apart else root
+        dst = base / "tests" / name
         shutil.copytree(src, dst, ignore=_ignore_tests)
         test_dirs[name] = dst
 
@@ -72,7 +93,23 @@ def build_sandbox(
         python=python,
         env=env,
         network=config.network,
+        oracle=OracleRoot(oracle_root, _oracle_env(oracle_root)) if oracle_root else None,
     )
+
+
+def _oracle_env(root: Path) -> dict[str, str]:
+    """Env for a process run in an oracle root: no package path, HOME and TMPDIR inside it."""
+    tmp = root / "tmp"
+    tmp.mkdir()
+    return {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(root),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONHASHSEED": "0",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "TMPDIR": str(tmp),
+    }
 
 
 # Process groups started by run_in_sandbox and not yet killed, keyed by sandbox root,
@@ -130,8 +167,9 @@ def _probe() -> str | None:
 
 def _masked() -> list[str]:
     """Directories a sandbox child must not read: the real home, the checkout (which
-    holds the hidden tests and git config) and the runner's temp and work dirs."""
-    paths = {str(Path.home()), os.getcwd(), "/tmp", "/var/tmp"}
+    holds the hidden tests and git config) and the runner's temp and work dirs. The temp
+    dir holds every oracle root, so it is masked even when TMPDIR is not /tmp."""
+    paths = {str(Path.home()), os.getcwd(), "/tmp", "/var/tmp", tempfile.gettempdir()}
     for var in ("GITHUB_WORKSPACE", "RUNNER_TEMP", "RUNNER_WORKSPACE"):
         if os.environ.get(var):
             paths.add(os.environ[var])
@@ -254,3 +292,5 @@ def reap(sb: Sandbox | None = None) -> None:
 def destroy(sb: Sandbox) -> None:
     reap(sb)
     shutil.rmtree(sb.root, ignore_errors=True)
+    if sb.oracle is not None:
+        shutil.rmtree(sb.oracle.root, ignore_errors=True)

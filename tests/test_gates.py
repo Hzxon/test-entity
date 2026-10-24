@@ -15,10 +15,12 @@ pytest.importorskip("testgate.gitinfo")
 
 from testgate import gates
 from testgate.core import (
+    SUITE_TRUST,
     ChangedFile,
     CoverageData,
     GateResult,
     Mutant,
+    OracleMode,
     ProjectConfig,
     RunContext,
     Status,
@@ -74,9 +76,14 @@ class Fakes:
         tests: dict[str, Path],
         overrides: dict[str, str] | None = None,
         dest: str | None = None,
+        oracle: OracleMode = OracleMode.PROCESS,
     ) -> SimpleNamespace:
         sb = SimpleNamespace(
-            python="py", root=Path("/nowhere"), test_dirs=tests, overrides=overrides or {}
+            python="py",
+            root=Path("/nowhere"),
+            test_dirs=tests,
+            overrides=overrides or {},
+            oracle=oracle,
         )
         # snapshot the hidden dir's files: the gate removes its temp copies afterwards
         hidden = tests.get("hidden")
@@ -417,6 +424,27 @@ def test_tests_without_dirs_fails(tmp_path: Path, fakes: Fakes) -> None:
 
 
 # --- hidden -----------------------------------------------------------------
+
+
+def test_suite_names_are_single_sourced(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    assert set(gates._suite_paths(ctx)) == set(SUITE_TRUST)
+    assert list(gates._test_dirs(ctx, tuple(SUITE_TRUST))) == list(SUITE_TRUST)
+
+
+@pytest.mark.parametrize("mode", list(OracleMode))
+def test_sandbox_placement_follows_the_adapter_mode(
+    tmp_path: Path, fakes: Fakes, mode: OracleMode
+) -> None:
+    fakes.oracle = mode  # type: ignore[attr-defined]
+    ctx = make_ctx(tmp_path)
+    fakes.runs = [tr(0, passed=1)]
+    gates.gate_hidden(ctx)
+    assert fakes.builds[0].oracle is mode
+
+
+def test_adapter_without_a_mode_is_in_process(tmp_path: Path, fakes: Fakes) -> None:
+    assert make_ctx(tmp_path).oracle is OracleMode.IN_PROCESS
 
 
 def test_hidden_required_vs_optional(tmp_path: Path, fakes: Fakes) -> None:

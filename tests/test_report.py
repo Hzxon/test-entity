@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from testgate.core import ChangedFile, GateResult, ProjectConfig, RunContext, Status
+from testgate.languages import get_language
 from testgate.report import build_report, private_text, to_markdown, write_outputs
 
 SECRET = "test_hidden_secret_name AssertionError: expected 42"
@@ -62,6 +63,16 @@ def test_verdict_pass_with_warn_and_skip(tmp_path: Path) -> None:
         GateResult("mutation", Status.SKIP, "s"),
     ]
     assert build_report(make_ctx(tmp_path), results).verdict is Status.PASS
+
+
+def test_report_names_the_oracle_mode(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.language = get_language("http")
+    report = build_report(ctx, [])
+    assert report.to_public_dict()["oracle"] == "black-box"
+    assert "oracle: black-box" in to_markdown(report)
+    ctx.language = get_language("python")
+    assert build_report(ctx, []).to_public_dict()["oracle"] == "in-process"
 
 
 def test_changed_counts(tmp_path: Path) -> None:

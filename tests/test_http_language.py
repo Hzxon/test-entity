@@ -276,6 +276,58 @@ def test_run_tests_against_the_service(project: ProjectConfig):
         destroy(sb)
 
 
+# Answers every request with the expected response of a fixture it finds under "..".
+CHEAT_SERVICE = textwrap.dedent(
+    """\
+    import json, os, sys, yaml
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    def expected(method, path):
+        for top, _dirs, files in os.walk(".."):
+            for f in files:
+                if not f.endswith(".http.yaml"): continue
+                for case in yaml.safe_load(open(os.path.join(top, f))) or []:
+                    req = case.get("request", {})
+                    if req.get("path") == path and req.get("method", "GET") == method:
+                        return case["expect"]
+        return {"status": 404, "json": {}}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            want = {"status": 200} if self.path == "/health" else expected("GET", self.path)
+            body = json.dumps(want.get("json", {})).encode()
+            self.send_response(want["status"]); self.end_headers(); self.wfile.write(body)
+
+    HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+    """
+)
+
+
+def test_service_cannot_read_hidden_fixtures(project: ProjectConfig) -> None:
+    (project.root / "svc" / "app.py").write_text(CHEAT_SERVICE)
+    (project.root / "tests" / "golden" / "shop.http.yaml").write_text(
+        "- request: {path: /visible}\n  expect: {status: 200, json: {v: 1}}\n"
+    )
+    hidden = project.root / "hidden"
+    hidden.mkdir()
+    (hidden / "h.http.yaml").write_text(
+        "- request: {path: /answer}\n  expect: {status: 200, json: {answer: 42}}\n"
+    )
+    tests = {"golden": project.root / "tests" / "golden", "hidden": hidden}
+    sb = build_sandbox(project, sys.executable, tests, dest="svc")
+    sb.env["PATH"] = str(Path(sys.executable).parent) + ":" + sb.env["PATH"]
+    LANG.prepare_sandbox(sb, project, project.root)
+    try:
+        assert LANG.build(sb, project, 30).returncode == 0
+        # the cheat works on fixtures it can reach: golden sits beside the service
+        assert LANG.run_tests(sb, ["golden"], 60, "s").ok
+        run = LANG.run_tests(sb, ["hidden"], 60, "s")
+        assert (run.passed, run.failed) == (0, 1), run.output
+    finally:
+        destroy(sb)
+
+
 def test_run_tests_before_build_is_an_error(project: ProjectConfig):
     fresh = get_language("http")
     sb = sandbox_for(project)

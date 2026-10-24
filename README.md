@@ -27,7 +27,7 @@ Run it locally with `testgate run --base origin/main`, or `testgate run --no-git
 | Gate | What it checks | Public output | Blocks |
 |---|---|---|---|
 | protected | Protected paths equal the base ref | changed paths | yes |
-| hygiene | No test-detection code, no `conftest.py` in auto, no package import of tests; no changed line adds a coverage exclusion (`pragma: no cover`, `v8`/`c8`/`istanbul ignore`) | file:line | yes (warn if pre-existing) |
+| hygiene | No test-detection code, no `conftest.py` in auto, no package import of tests; no changed line adds a coverage exclusion (`pragma: no cover`, `v8`/`c8`/`istanbul ignore`), an exit override or hook (`os._exit`, `atexit`, signal handlers, `process.exit`), a skip/xfail/only marker, a trivial assertion (`assert True`, `expect(true)`) or frame/module introspection (`inspect.stack`, `sys._getframe`, `gc.get_objects`, `sys.modules`); lines are lower-cased and adjacent string pieces joined before matching | file:line | yes (warn if pre-existing) |
 | build | Package imports and compiles | exit code | yes |
 | tests | Golden and auto tests pass, `repeats` times (flaky check) | pass/fail counts | yes |
 | hidden | Hidden tests pass | pass/fail counts | yes |

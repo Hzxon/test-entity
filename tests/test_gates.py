@@ -919,3 +919,66 @@ def test_hygiene_without_git_checks_every_line(tmp_path: Path) -> None:
     write(tmp_path, "src/pkg/a.py", "x = 1  # pragma: no cover\n")
     ctx = make_ctx(tmp_path)
     assert gates.gate_hygiene(ctx).status is Status.FAIL
+
+
+# --- exit overrides and test weakening (#67) --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("line", "reason"),
+    [
+        ("os._exit(0)", "exit override"),
+        ('getattr(os, "_" + "exit")(0)', "exit override"),
+        ("getattr(OS, '_EX' 'IT')(0)", "exit override"),
+        ("process.exit(0);", "exit override"),
+        ("process.reallyExit(0);", "exit override"),
+        ("process.exitCode = 0;", "exit override"),
+        ("atexit.register(done)", "exit hook"),
+        ('__import__("at" + "exit")', "exit hook"),
+        ("signal.signal(signal.SIGTERM, h)", "signal or exit handler"),
+        ('process.on("exit", () => {});', "signal or exit handler"),
+        ("@pytest.mark.skip", "skip, xfail or only marker"),
+        ("@pytest.mark.xfail(strict=False)", "skip, xfail or only marker"),
+        ('pytest.skip("later")', "skip, xfail or only marker"),
+        ("@unittest.skip('x')", "skip, xfail or only marker"),
+        ('test.only("a", () => {});', "skip, xfail or only marker"),
+        ('it.skip("a", () => {});', "skip, xfail or only marker"),
+        ('describe.todo("a");', "skip, xfail or only marker"),
+        ('xit("a", () => {});', "skip, xfail or only marker"),
+        ("assert True", "trivial assertion"),
+        ("    assert 1", "trivial assertion"),
+        ("expect(true).toBe(true);", "trivial assertion"),
+        ("frames = inspect.stack()", "frame or module introspection"),
+        ("f = sys._getframe(1)", "frame or module introspection"),
+        ("for o in gc.get_objects():", "frame or module introspection"),
+        ("for m in list(sys.modules):", "frame or module introspection"),
+        ("caller = frame.f_back", "frame or module introspection"),
+    ],
+)
+def test_hygiene_fails_test_weakening_on_changed_line(
+    tmp_path: Path, line: str, reason: str
+) -> None:
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("tests/auto/test_x.py", {2})])
+    write(tmp_path, "tests/auto/test_x.py", f"y = 0\n{line}\n")
+    result = gates.gate_hygiene(ctx)
+    assert result.status is Status.FAIL
+    assert f"tests/auto/test_x.py:2: {reason}" in result.public["findings"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "sys.exit(main())",
+        "exit_code = run()",
+        "assert result is True",
+        "assert total == 1",
+        "expect(add(1, 2)).toBe(3);",
+        'test("adds", () => {});',
+        "if os.path.exists(p):",
+        "signals = []",
+    ],
+)
+def test_hygiene_allows_ordinary_lines(tmp_path: Path, line: str) -> None:
+    write(tmp_path, "src/pkg/a.py", f"{line}\n")
+    ctx = make_ctx(tmp_path, changed=[ChangedFile("src/pkg/a.py", {1})])
+    assert gates.gate_hygiene(ctx).status is Status.PASS

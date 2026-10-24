@@ -72,6 +72,27 @@ jobs:
 
 The action sets the `verdict` output. It never uploads `testgate-private.log`: artifacts and job logs are readable by the author of the change, so the private log stays on the runner, and runs that include hidden tests are redacted even there (no hidden test names, paths or assertion text).
 
+## Reviewing agent PRs
+
+A branch written by an agent is untrusted input on your machine too. A trusted
+Claude Code folder loads the branch's `.claude/settings.json` hooks,
+`.mcp.json`, `CLAUDE.md` and `AGENTS.md` on checkout, and `uv run` builds the
+project through the branch's `pyproject.toml` `[build-system]`.
+
+- Check PR branches out only in a disposable worktree outside trusted folders:
+  `scripts/review-branch <pr-number | branch>` does that under `$TMPDIR` with
+  checkout hooks off, and lists the changed files that alter tool behaviour so
+  you read them first.
+- Install with `uv sync --locked --no-install-project --no-build`
+  (`scripts/review-branch <pr> --sync`): no build backend, no sdist builds.
+- Never run `testgate run` on an untrusted branch outside OS isolation;
+  `scripts/review-branch <pr> --run` refuses without bubblewrap on Linux.
+- Keep the hidden-tests clone out of `~/dev` and away from gated repos: a local
+  run gives the code under test read access to everything the user can read.
+- The self-gate's `protected` list covers `.claude/**`, `.mcp.json`,
+  `CLAUDE.md`, `AGENTS.md`, `pyproject.toml` and `uv.lock`, so a PR that edits
+  them fails until the owner lands it through the bypass ceremony.
+
 ## Languages
 
 | language | tests | property tests | coverage | mutation | build check |

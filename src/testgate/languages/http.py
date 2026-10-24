@@ -272,6 +272,31 @@ def _route_key(openapi: str, route: str) -> str:
     return f"{openapi}#{route}"
 
 
+def _spec_rel(cfg: ProjectConfig) -> str:
+    """The OpenAPI document's repo-relative path (http.openapi is package-relative)."""
+    assert cfg.http_openapi is not None
+    return f"{cfg.package}/{cfg.http_openapi}" if cfg.package not in (".", "") else cfg.http_openapi
+
+
+def _base_spec(cfg: ProjectConfig, base_ref: Any) -> str | None:
+    """The OpenAPI text at the base ref, or None (no ref, first adoption, no spec there)."""
+    if not cfg.http_openapi or not base_ref or base_ref == "worktree":
+        return None
+    return gitinfo.show_file(cfg.root, str(base_ref), _spec_rel(cfg))
+
+
+def merged_routes(base_text: str | None, head_text: str | None) -> tuple[dict[str, Any], set[str]]:
+    """(routes, added) with the base spec in charge (#66).
+
+    Every base route keeps its base definition, whatever the change did to it; the
+    change can only add routes. ``added`` are the routes the base spec lacks.
+    """
+    base = load_routes(base_text) if base_text is not None else {}
+    head = load_routes(head_text) if head_text is not None else {}
+    added = {r for r in head if r not in base}
+    return {**{r: head[r] for r in added}, **base}, added
+
+
 # --- differential (#35) ---------------------------------------------------------
 
 
@@ -556,10 +581,12 @@ class HttpLanguage:
             raise GateError("http adapter: build must run before coverage")
         if not cfg.http_openapi:
             return self.run_tests(sb, names, timeout_s, seed), CoverageData()
+        base_text = _base_spec(cfg, cfg.raw.get("_source"))
         doc = sb.src_root / cfg.http_openapi
-        if not doc.is_file():
+        if not doc.is_file() and base_text is None:
             raise GateError(f"http.openapi not found in the package: {cfg.http_openapi}")
-        routes = load_routes(doc.read_text(encoding="utf-8"))
+        head_text = doc.read_text(encoding="utf-8") if doc.is_file() else None
+        routes, _ = merged_routes(base_text, head_text)
         hits: set[str] = set()
         self._record = lambda case: hits.add(match_route(routes, case.method, case.path) or "")
         try:
@@ -574,28 +601,31 @@ class HttpLanguage:
         return run, data
 
     def changed_units(self, ctx: RunContext) -> list[ChangedFile] | None:
-        """Routes whose OpenAPI definition differs from the base ref, as ChangedFile entries."""
+        """Routes that count as changed: only routes the base spec lacks (#66).
+
+        Editing or deleting a base route's definition no longer marks it changed, so
+        a change cannot exempt routes from the differential gate by touching the spec;
+        the mutation gate reports such an edit for human review instead.
+        """
         cfg = ctx.config
         if ctx.base_ref is None or not cfg.http_openapi:
             return None
-        rel = (
-            f"{cfg.package}/{cfg.http_openapi}"
-            if cfg.package not in (".", "")
-            else cfg.http_openapi
-        )
-        now_file = cfg.root / rel
+        now_file = cfg.root / _spec_rel(cfg)
         if not now_file.is_file():
             return None
-        now = load_routes(now_file.read_text(encoding="utf-8"))
-        base_text = gitinfo.show_file(cfg.root, ctx.base_ref, rel)
-        base = load_routes(base_text) if base_text else {}
-        changed = [
-            ChangedFile(_route_key(cfg.http_openapi, r), {1})
-            for r, op in now.items()
-            if r not in base
-            or json.dumps(base[r], sort_keys=True) != json.dumps(op, sort_keys=True)
-        ]
-        return changed
+        base_text = _base_spec(cfg, ctx.base_ref)
+        _, added = merged_routes(base_text, now_file.read_text(encoding="utf-8"))
+        return [ChangedFile(_route_key(cfg.http_openapi, r), {1}) for r in sorted(added)]
+
+    def spec_changed(self, ctx: RunContext) -> bool:
+        """True when the change edits the OpenAPI document the base ref has."""
+        cfg = ctx.config
+        if ctx.base_ref is None or not cfg.http_openapi:
+            return False
+        base = _base_spec(cfg, ctx.base_ref)
+        now_file = cfg.root / _spec_rel(cfg)
+        now = now_file.read_text(encoding="utf-8") if now_file.is_file() else None
+        return base is not None and now != base
 
     def generate_mutants(
         self, path: str, source: str, lines: set[int], seed: str, max_mutants: int
@@ -605,6 +635,14 @@ class HttpLanguage:
     def mutation_gate(self, ctx: RunContext) -> GateResult:
         """Differential run: fixtures on unchanged routes must get identical answers from
         the base ref's service and the head's. A difference is a surviving "mutant"."""
+        result = self._differential(ctx)
+        if self.spec_changed(ctx):
+            # judged against the base spec; the edit itself is a contract change (#66)
+            result.public["spec_changed"] = True
+            result.summary += "; the OpenAPI spec changed: a human must review it"
+        return result
+
+    def _differential(self, ctx: RunContext) -> GateResult:
         cfg = ctx.config
         name = "mutation"
         if ctx.base_ref is None:
@@ -634,7 +672,10 @@ class HttpLanguage:
             for sb in boxes:
                 sb.env["PATH"] = ctx_path(ctx, sb)
                 self.prepare_sandbox(sb, cfg, cfg.root)
-            routes = load_routes((head_sb.src_root / cfg.http_openapi).read_text(encoding="utf-8"))
+            routes, _ = merged_routes(
+                _base_spec(cfg, ctx.base_ref),
+                (head_sb.src_root / cfg.http_openapi).read_text(encoding="utf-8"),
+            )
             cases, _ = load_cases(head_sb.root, self._files(head_sb, list(dirs), None), ctx.seed)
             pairs = unchanged_cases(cases, routes, changed)
             if not pairs:

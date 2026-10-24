@@ -115,6 +115,15 @@ def changed_lines(root: Path, base_ref: str) -> list[ChangedFile]:
     return [ChangedFile(path=p, lines=ls) for p, ls in sorted(result.items()) if ls]
 
 
+def list_files(root: Path, ref: str, path: str) -> list[str]:
+    """Paths of files under `path` at `ref`, relative to `root`."""
+    proc = _git(root, "ls-tree", "-r", "--name-only", "--full-name", ref, "--", f"./{path}")
+    if proc.returncode != 0:
+        return []
+    prefix = _git(root, "rev-parse", "--show-prefix").stdout.strip()
+    return [line[len(prefix) :] for line in proc.stdout.splitlines() if line.startswith(prefix)]
+
+
 def show_file(root: Path, ref: str, path: str) -> str | None:
     proc = _git(root, "show", f"{ref}:./{path}")
     return proc.stdout if proc.returncode == 0 else None

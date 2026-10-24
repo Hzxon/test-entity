@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import jsonschema
@@ -348,10 +348,110 @@ def free_port() -> int:
 _PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
 
 
+_OVERRIDE = "compose.testgate.yaml"  # written next to the compose file by prepare_sandbox
+
+
 def compose_cmd(cfg: ProjectConfig, project: str, *args: str) -> list[str]:
-    """``docker compose -f <file> -p <project> <args>``; the file is relative to the package."""
+    """``docker compose -f <file> -f <override> -p <project> <args>``; files are package-relative."""
     assert cfg.http_compose is not None
-    return ["docker", "compose", "-f", cfg.http_compose, "-p", project, *args]
+    override = str(PurePosixPath(cfg.http_compose).parent / _OVERRIDE)
+    return ["docker", "compose", "-f", cfg.http_compose, "-f", override, "-p", project, *args]
+
+
+# --- compose safety (#57) -------------------------------------------------------
+
+_HOST_MODES = ("pid", "ipc", "uts", "userns_mode", "cgroup")
+_FORBIDDEN_KEYS = ("privileged", "cap_add", "devices", "network_mode", "networks", "extends")
+
+
+def _is_dockerfile(path: str) -> bool:
+    name = PurePosixPath(path).name.lower()
+    return name.startswith("dockerfile") or name.endswith(".dockerfile")
+
+
+def compose_problems(text: str, service: str, port: int, package_dir: Path) -> list[str]:
+    """Reasons the compose file could reach the host; empty when it is safe to run.
+
+    The service under test and its helpers run on the runner's Docker daemon, so any
+    of these would hand the change root on the runner, and the secrets with it.
+    """
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        return [f"compose file is not YAML: {exc}"]
+    services = doc.get("services") if isinstance(doc, dict) else None
+    if not isinstance(services, dict) or not services:
+        return ["compose file has no services"]
+    problems: list[str] = []
+    if "docker.sock" in text:
+        problems.append("mounts the Docker socket")
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        for key in _FORBIDDEN_KEYS:
+            if key in svc and svc[key] not in (False, None, [], {}):
+                problems.append(f"service {name}: {key} is not allowed")
+        for key in _HOST_MODES:
+            if str(svc.get(key, "")).startswith("host"):
+                problems.append(f"service {name}: {key}: host is not allowed")
+        for opt in svc.get("security_opt") or []:
+            if "unconfined" in str(opt):
+                problems.append(f"service {name}: security_opt {opt} is not allowed")
+        for vol in svc.get("volumes") or []:
+            source, kind = _volume_source(vol)
+            if kind == "bind" and not _inside(package_dir, source):
+                problems.append(f"service {name}: bind mount outside the project: {source}")
+        for spec in svc.get("ports") or []:
+            if name != service:
+                problems.append(f"service {name}: only {service} may publish ports")
+            elif _container_port(spec) != port:
+                problems.append(f"service {name}: publishes {spec}; only {port} is allowed")
+    for vname, vol in (doc.get("volumes") or {}).items():
+        opts = vol.get("driver_opts") if isinstance(vol, dict) else None
+        if isinstance(opts, dict) and opts:
+            problems.append(f"volume {vname}: driver_opts are not allowed")
+    return problems
+
+
+def _volume_source(vol: Any) -> tuple[str, str]:
+    if isinstance(vol, dict):
+        source = str(vol.get("source", ""))
+        return source, str(vol.get("type", "volume"))
+    source = str(vol).split(":", 1)[0]
+    bind = source.startswith(("/", ".", "~", "$")) or "/" in source
+    return source, "bind" if bind else "volume"
+
+
+def _inside(package_dir: Path, source: str) -> bool:
+    if source.startswith(("~", "$")):
+        return False
+    target = (package_dir / source).resolve()
+    return target == package_dir.resolve() or package_dir.resolve() in target.parents
+
+
+def _container_port(spec: Any) -> int | None:
+    if isinstance(spec, dict):
+        value = spec.get("target")
+    else:
+        value = str(spec).rsplit(":", 1)[-1].split("/", 1)[0]
+    try:
+        return int(str(value))
+    except ValueError:
+        return None
+
+
+def _override(services: list[str], service: str) -> str:
+    """testgate owns networking: helpers sit on an internal network only (no egress);
+    the service under test joins it too, plus the default network its port needs."""
+    nets = {
+        s: ["default", "testgate_internal"] if s == service else ["testgate_internal"]
+        for s in services
+    }
+    doc = {
+        "networks": {"testgate_internal": {"internal": True}},
+        "services": {s: {"networks": n} for s, n in nets.items()},
+    }
+    return yaml.safe_dump(doc, sort_keys=True)
 
 
 class _Service:
@@ -477,6 +577,8 @@ class HttpLanguage:
 
     def prepare_sandbox(self, sb: Sandbox, cfg: ProjectConfig, project_root: Path) -> None:
         sb.env.update(cfg.http_env)
+        if cfg.http_compose:
+            self._trusted_compose(sb, cfg, project_root)
         if not sb.network:
             # best effort for a process we do not control: proxy-aware clients hit a dead port
             sb.env.update(
@@ -490,6 +592,40 @@ class HttpLanguage:
                 }
             )
 
+    def _trusted_compose(self, sb: Sandbox, cfg: ProjectConfig, project_root: Path) -> None:
+        """Replace the compose file and every Dockerfile with their base-ref copies (#57).
+
+        The change still supplies the code that goes into the image; it cannot change
+        how the image is built or how the container runs. Problems are kept for build().
+        """
+        assert cfg.http_compose is not None
+        source = cfg.raw.get("_source")
+        if source and source != "worktree":
+            pkg = cfg.package.strip("/")
+            prefix = "" if pkg in ("", ".") else pkg + "/"
+            for rel in [cfg.http_compose] + [
+                f[len(prefix) :]
+                for f in gitinfo.list_files(project_root, str(source), pkg or ".")
+                if _is_dockerfile(f)
+            ]:
+                text = gitinfo.show_file(project_root, str(source), prefix + rel)
+                target = sb.src_root / rel
+                if text is None:
+                    target.unlink(missing_ok=True)  # the base ref has no such file
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(text, encoding="utf-8")
+        compose = sb.src_root / cfg.http_compose
+        text = compose.read_text(encoding="utf-8") if compose.is_file() else ""
+        self._compose_problems = compose_problems(
+            text, cfg.http_compose_service, cfg.http_compose_port, sb.src_root
+        )
+        doc = yaml.safe_load(text) if text and not self._compose_problems else None
+        services = list((doc or {}).get("services") or {})
+        (compose.parent / _OVERRIDE).write_text(
+            _override(services, cfg.http_compose_service), encoding="utf-8"
+        )
+
     def auto_file_ok(self, path: Path) -> bool:
         return path.name.endswith(".http.yaml")
 
@@ -500,6 +636,10 @@ class HttpLanguage:
         self, sb: Sandbox, cfg: ProjectConfig, timeout_s: int
     ) -> subprocess.CompletedProcess[str]:
         self._cfg = cfg
+        problems = getattr(self, "_compose_problems", []) if cfg.http_compose else []
+        if problems:
+            argv = compose_cmd(cfg, "<project>", "up")
+            return subprocess.CompletedProcess(argv, 1, "", "; ".join(problems))
         svc = self._service(sb)
         try:
             ok, why = svc.start(min(timeout_s, cfg.http_startup_timeout_s))

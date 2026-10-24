@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Print a one-hour installation token for the agents' GitHub App (#59).
+#
+#   scripts/agent-gh-token <app-id> <private-key.pem> [owner/repo]
+#
+# The app has Contents and Pull requests write on one repository and nothing
+# else: no admin, no rulesets, no statuses, no access to the hidden-tests repo.
+# Agent sessions use it as GH_TOKEN instead of the owner's login. The key never
+# leaves this machine; only the short-lived token is printed.
+set -euo pipefail
+
+[ $# -ge 2 ] || { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+app=$1
+key=$2
+repo=${3:-Hzxon/test-entity}
+api=${GITHUB_API_URL:-https://api.github.com}
+
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+now=$(date +%s)
+header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now - 60)) $((now + 540)) "$app" | b64url)
+signature=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$key" | b64url)
+jwt="$header.$payload.$signature"
+
+hdr=(-H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json")
+installation=$(curl -fsS "${hdr[@]}" "$api/repos/$repo/installation" |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])')
+curl -fsS -X POST "${hdr[@]}" "$api/app/installations/$installation/access_tokens" |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])'

@@ -1,27 +1,48 @@
 name: ci
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv python install ${{ matrix.python-version }}
-      - run: uv sync --extra dev --python ${{ matrix.python-version }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.13.0"
+          enable-cache: false  # a cache shared between PR and main runs could be poisoned
+      - run: uv python install "$PYTHON_VERSION"
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+      - run: uv sync --locked --extra dev --python "$PYTHON_VERSION"
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+      - name: requirements.lock (the action's hashed install) matches uv.lock
+        run: uv export --frozen --no-dev --no-emit-project --quiet -o requirements.lock && git diff --exit-code requirements.lock
       - run: uv run ruff check .
       - run: uv run mypy src/testgate
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 22
-      - run: npm ci
+      - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: examples/discount-js
-      - run: npm ci
+      - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: examples/discount-js-cheat
       - name: Install bubblewrap (OS isolation for sandbox children, #56)
         run: |

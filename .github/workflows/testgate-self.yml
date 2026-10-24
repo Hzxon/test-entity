@@ -7,12 +7,17 @@ name: testgate-self
 on:
   pull_request:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: testgate-self-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   honest-passes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -27,10 +32,14 @@ jobs:
         env:
           TESTGATE_SEED: public-self-test-seed  # this job runs the PR's own action, so it gets no secrets (#47)
       - name: Verdict must be pass
-        run: test "${{ steps.gate.outputs.verdict }}" = "pass"
+        run: test "$VERDICT" = "pass"
+        env:
+          VERDICT: ${{ steps.gate.outputs.verdict }}
 
   cheat-fails:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -46,4 +55,6 @@ jobs:
         env:
           TESTGATE_SEED: public-self-test-seed  # this job runs the PR's own action, so it gets no secrets (#47)
       - name: Verdict must be fail
-        run: test "${{ steps.gate.outputs.verdict }}" = "fail"
+        run: test "$VERDICT" = "fail"
+        env:
+          VERDICT: ${{ steps.gate.outputs.verdict }}

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -70,7 +72,17 @@ def test_cheat_http_example_fails_without_leaking_hidden_names(tmp_path: Path) -
 COMPOSE = EXAMPLES / "shop-http-compose"
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker not on PATH")
+def _docker_up() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    probe = subprocess.run(["docker", "info"], capture_output=True, check=False, timeout=30)
+    return probe.returncode == 0
+
+
+# CI runners have a daemon; locally a CLI without a running daemon is a skip.
+@pytest.mark.skipif(
+    not os.environ.get("CI") and not _docker_up(), reason="no running docker daemon"
+)
 def test_compose_http_example_passes(tmp_path: Path) -> None:
     code, out, _ = _run_cli(COMPOSE, tmp_path)
     report = json.loads(out.read_text())

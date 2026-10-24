@@ -39,3 +39,4 @@ gates:
 sandbox:
   network: false
   timeout_s: 600
+  require_isolation: true  # ADR 0003: the gate runs PR code only under bubblewrap

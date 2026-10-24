@@ -1,15 +1,18 @@
-# testgate gating its own repository. Config comes from testgate.yaml on main;
-# hidden tests come from the private repo Hzxon/testgate-hidden via a
-# read-only deploy key held in the TESTGATE_HIDDEN_SSH_KEY secret.
+# testgate gating its own repository (ADR 0003). Config comes from testgate.yaml
+# on main; hidden tests come from the private repo Hzxon/testgate-hidden via a
+# read-only deploy key.
 #
-# The gate itself runs from the base ref (#47): the PR's own action.yml and
-# src/testgate are under judgement, so they never judge themselves. The secrets
-# live in the `testgate` environment; its required reviewer reads the PR's
-# `.github/**` diff before approving, because the PR still supplies this file.
+# pull_request_target: GitHub always runs THIS file as it is on the base branch,
+# so a PR cannot change how it is judged. The PR's code runs only inside the
+# gate's sandbox (bubblewrap), never as a workflow step. The verdict goes out as
+# the commit status `testgate/verdict`, signed by the testgate GitHub App; the
+# main ruleset requires that context from that app, so no PR workflow can fake it.
 name: testgate
 
 on:
-  pull_request:
+  # ADR 0003: no step runs PR code; it runs only in the gate's bubblewrap sandbox
+  pull_request_target:  # zizmor: ignore[dangerous-triggers]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -20,19 +23,26 @@ concurrency:
 
 jobs:
   testgate:
+    # fork PRs never reach the secrets; this repository takes no fork PRs
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # Required reviewer, and deployments allowed from `main` only: a
+    # pull_request run (ref refs/pull/N/merge) can never use these secrets.
     environment: testgate
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Check out the gate from the base ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .testgate-trusted
+          persist-credentials: false
+
+      - name: Check out the change under judgement
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0; the hidden suite runs node --check on JS mutants
@@ -49,9 +59,37 @@ jobs:
           persist-credentials: false
 
       - name: Run testgate
+        id: gate
         uses: ./.testgate-trusted
+        continue-on-error: true
         with:
+          root: pr
           base: origin/${{ github.base_ref }}
           hidden-dir: ${{ github.workspace }}/.testgate-hidden
         env:
           TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
+
+      # The app key enters the job only after the code under test has finished.
+      - name: Mint a status-only token
+        id: app
+        if: always()
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.TESTGATE_APP_ID }}
+          private-key: ${{ secrets.TESTGATE_APP_KEY }}
+          permission-statuses: write
+
+      - name: Post the verdict
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERDICT: ${{ steps.gate.outputs.verdict }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          state=failure
+          if [ "$VERDICT" = pass ]; then state=success; fi
+          gh api "repos/$REPO/statuses/$SHA" -f state="$state" -f context=testgate/verdict \
+            -f description="testgate: ${VERDICT:-error}" -f target_url="$RUN_URL"
+          test "$state" = success

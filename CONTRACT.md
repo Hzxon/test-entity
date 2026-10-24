@@ -22,8 +22,10 @@ and `testgate.yaml`. The gates stay honest because:
 2. The `protected` gate fails the run if any protected path differs from the
    base ref. It runs first; nothing else runs after it fails.
 3. Hidden tests live **outside the repo** (`TESTGATE_HIDDEN_DIR` or `hidden:`).
-4. The Hypothesis seed is a CI secret (`TESTGATE_SEED`). Without it, a random
-   per-run seed is used and the report says `seed_is_secret: false`.
+4. The seed is a CI secret (`TESTGATE_SEED`). Without it, a random
+   per-run seed is used and the report says `seed_is_secret: false`. The secret
+   never enters a sandbox: each gate gets `HMAC-SHA256(seed, head SHA + gate)`
+   (`gates.derive_seed`), so a leaked derived seed predicts nothing on another head.
 5. Every pytest run happens in a **fresh temp root** containing only the
    package and the chosen test dirs, with `--noconftest -p no:cacheprovider`,
    a scrubbed environment, and sockets blocked unless `network: true`.

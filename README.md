@@ -38,7 +38,7 @@ Run it locally with `testgate run --base origin/main`, or `testgate run --no-git
 
 Hidden tests live outside the repo. The path comes from `hidden:` in `testgate.yaml` or from the env var named by `tests.hidden_env` (default `TESTGATE_HIDDEN_DIR`). The hidden gate runs them against the package alone. If no hidden dir is available the gate fails, unless `hidden.required` is false.
 
-`TESTGATE_SEED` is passed to pytest as `--hypothesis-seed`. Without it, testgate uses a random seed per run and the report says `seed_is_secret: false`. Auto tests are not used to kill mutants.
+`TESTGATE_SEED` never reaches the code under test. Each gate gets `HMAC-SHA256(TESTGATE_SEED, head SHA + gate name)`, and only that derived value is passed to pytest as `--hypothesis-seed`, to fast-check, to HTTP placeholders and to mutant sampling. The derived seeds are written to the private log for reproduction. Without it, testgate uses a random seed per run and the report says `seed_is_secret: false`. Auto tests are not used to kill mutants.
 
 ## GitHub Action
 

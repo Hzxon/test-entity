@@ -7,6 +7,8 @@ text and the seed go to GateResult.private.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import hmac
 import random
 import re
 import shutil
@@ -652,7 +654,18 @@ GATES: dict[str, GateFn] = {
 }
 
 
+def derive_seed(key: str, head: str, gate: str) -> str:
+    """Per-run, per-gate seed: HMAC-SHA256(key, head + gate), first 16 hex digits (#55).
+
+    Only derived seeds reach a sandbox, so code under test never sees the secret,
+    and a seed leaked on one head SHA predicts nothing about another.
+    """
+    msg = f"{head}:{gate}".encode()
+    return hmac.new(key.encode(), msg, hashlib.sha256).hexdigest()[:16]
+
+
 def run_gates(ctx: RunContext, only: list[str] | None = None) -> list[GateResult]:
+    """Run the gates in order. ``ctx.seed`` is the key; each gate gets a derived seed."""
     results: list[GateResult] = []
     stopped = False
     for name in GATE_ORDER:
@@ -665,9 +678,13 @@ def run_gates(ctx: RunContext, only: list[str] | None = None) -> list[GateResult
         if not ctx.config.gates.get(name, True):
             results.append(_skip(name, "disabled"))
             continue
+        seed = derive_seed(ctx.seed, ctx.head, name)
+        ctx.log(f"[{name}] seed {seed}")  # derived, safe to keep for reproduction
+        # a shallow copy: private_log and shared stay the same objects
+        gate_ctx = dataclasses.replace(ctx, seed=seed)
         start = time.monotonic()
         try:
-            result = GATES[name](ctx)
+            result = GATES[name](gate_ctx)
         except Exception as exc:  # noqa: BLE001 - any gate crash becomes Status.ERROR
             result = _result(
                 name,

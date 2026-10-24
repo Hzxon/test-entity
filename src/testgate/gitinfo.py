@@ -47,6 +47,12 @@ def resolve_base(root: Path, base: str | None) -> str | None:
     return None
 
 
+def head_sha(root: Path) -> str:
+    """Full SHA of HEAD, or "" when there is none (no commits yet)."""
+    proc = _git(root, "rev-parse", "--verify", "--quiet", "HEAD")
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
 def _parse_diff(diff: str) -> dict[str, set[int]]:
     """Map each .py file in a --unified=0 diff to its added/modified line numbers."""
     out: dict[str, set[int]] = {}

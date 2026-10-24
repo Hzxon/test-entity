@@ -125,6 +125,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed_is_secret=bool(env_seed),
         python=python,
         language=get_language(cfg.language),
+        head="" if no_git else gitinfo.head_sha(root),
     )
     results = run_gates(ctx, only)
     report = build_report(ctx, results)

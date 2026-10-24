@@ -97,10 +97,13 @@ class RunContext:
     base_ref: str | None  # git ref the change is compared with; None = no git (--no-git)
     changed: list[ChangedFile]  # empty when base_ref is None; gates then treat all lines as changed
     hidden_dir: Path | None  # resolved hidden test dir, or None
-    seed: str  # secret seed if the env var is set, else a per-run random seed
+    # secret seed if the env var is set, else a per-run random seed. run_gates never
+    # passes it on: each gate sees HMAC(seed, head + gate) instead (#55).
+    seed: str
     seed_is_secret: bool
     python: str  # interpreter path used inside the sandbox
     language: Any = None  # the Language adapter (typed Any: core must not import languages/)
+    head: str = ""  # commit (or worktree) identity mixed into derived seeds
     private_log: list[str] = field(default_factory=list)  # full detail; never shown to the author
     shared: dict[str, Any] = field(default_factory=dict)  # gate-to-gate hand-off (coverage data)
 

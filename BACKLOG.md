@@ -25,6 +25,14 @@ Scope decisions made with the user on 2026-10-23:
 
 ## Current state (2026-10-24, v1 complete on main; issues #1-#37 closed; tag v0 at ac5b38c)
 
+Security audit 2026-10-24: issues #45-#73 all closed. The gate takes its verdict
+from a runner-owned result channel, redacts hidden output, derives seeds, runs
+code under bubblewrap on Linux, installs the JS toolchain itself, and reads the
+OpenAPI spec and compose files from the base ref. The self-gate runs on
+`pull_request_target` and posts `testgate/verdict` via the "testgate gate" app
+(ADR 0003). Agents act as the "testgate agent" app and cannot merge; the owner
+merges and does bypass ceremonies (ADR 0001).
+
 Done and verified locally:
 - Seven gates in `src/testgate/gates.py`, run in order:
   protected, hygiene, build, tests, hidden, coverage, mutation.

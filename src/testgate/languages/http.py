@@ -458,7 +458,16 @@ class _Service:
     """The service under test: a subprocess from ``cwd`` killed with its process group,
     or a docker compose project when the config uses the compose form."""
 
-    def __init__(self, cfg: ProjectConfig, cwd: Path, env: dict[str, str], port: int, log: Path):
+    def __init__(
+        self,
+        cfg: ProjectConfig,
+        cwd: Path,
+        env: dict[str, str],
+        port: int,
+        log: Path,
+        sb: Sandbox | None = None,
+    ):
+        self.sb = sb  # set: the service process runs under OS isolation when available
         self.cfg = cfg
         self.cwd = cwd
         self.env = {**env, "PORT": str(port)}
@@ -478,6 +487,9 @@ class _Service:
                 return False, why
         else:
             argv = [a.replace("{port}", str(self.port)) for a in self.cfg.http_start]
+            if self.sb is not None:
+                # the fixture client is testgate itself, outside: share the network (#56)
+                argv = sandbox.wrap(self.sb, argv, network=True, cwd=self.cwd)
             with self.log.open("ab") as out:
                 self.proc = subprocess.Popen(
                     argv, cwd=self.cwd, env=self.env, stdout=out, stderr=out, start_new_session=True
@@ -630,7 +642,7 @@ class HttpLanguage:
         return path.name.endswith(".http.yaml")
 
     def _service(self, sb: Sandbox) -> _Service:
-        return _Service(self._cfg, sb.src_root, sb.env, free_port(), sb.root / "service.log")
+        return _Service(self._cfg, sb.src_root, sb.env, free_port(), sb.root / "service.log", sb)
 
     def build(
         self, sb: Sandbox, cfg: ProjectConfig, timeout_s: int

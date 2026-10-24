@@ -12,7 +12,7 @@ from pathlib import Path
 
 from testgate import config as config_mod
 from testgate import gitinfo, sandbox
-from testgate.core import GateError, RunContext, Status
+from testgate.core import GateError, GateResult, RunContext, Status
 from testgate.gates import GATE_ORDER, run_gates
 from testgate.languages import get_language
 from testgate.report import build_report, to_markdown, write_outputs
@@ -141,8 +141,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         language=get_language(cfg.language),
         head="" if no_git else gitinfo.head_sha(root),
     )
-    results = run_gates(ctx, only)
+    isolated = sandbox.isolation_available()
+    if cfg.require_isolation and not isolated:
+        # sandbox.require_isolation: no gate runs without OS isolation (#56)
+        results = [
+            GateResult(
+                "isolation",
+                Status.FAIL,
+                "OS isolation required (sandbox.require_isolation) but bubblewrap is unavailable",
+            ),
+            *(GateResult(g, Status.SKIP, "skipped: no OS isolation") for g in GATE_ORDER),
+        ]
+    else:
+        results = run_gates(ctx, only)
     report = build_report(ctx, results)
+    report.isolation = "bwrap" if isolated else "best-effort"
     if not args.quiet:
         print(to_markdown(report))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

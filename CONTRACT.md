@@ -85,6 +85,7 @@ sandbox:
   network: false
   timeout_s: 600
   python: null
+  require_isolation: false   # true: FAIL when bubblewrap is unavailable (#56)
 ```
 - A gate value may be a bool or a mapping with `enabled` plus that gate's options. Map options onto the flat `ProjectConfig` fields.
 - Allowed imports: `core`, `gitinfo`.

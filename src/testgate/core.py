@@ -73,6 +73,7 @@ class ProjectConfig:
     )
     mutation_jobs: int = max(1, (os.cpu_count() or 2) // 2)  # mutant runs in flight at once
     network: bool = False  # sandbox blocks sockets when False
+    require_isolation: bool = False  # FAIL when OS isolation (bubblewrap) is unavailable
     timeout_s: int = 600  # per pytest invocation
     python: str | None = None  # interpreter for the sandbox; None = sys.executable
     gates: dict[str, bool] = field(
@@ -196,6 +197,7 @@ class Report:
     changed_lines: int
     seed_is_secret: bool
     version: str = "0.1.0"
+    isolation: str = "best-effort"  # "bwrap" when sandbox children ran under bubblewrap
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -205,6 +207,7 @@ class Report:
             "changed_files": self.changed_files,
             "changed_lines": self.changed_lines,
             "seed_is_secret": self.seed_is_secret,
+            "isolation": self.isolation,
             "gates": [
                 {
                     "name": g.name,

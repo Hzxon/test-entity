@@ -23,6 +23,15 @@ runs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
       with:
         python-version: ${{ inputs.python-version }}
+    - name: Install bubblewrap
+      # OS isolation for sandbox children (#56); without it the report says best-effort
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; } || true
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
+        bwrap --ro-bind / / --unshare-net true 2>/dev/null \
+          || sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
     - name: Install testgate
       shell: bash
       run: pip install "${{ github.action_path }}"

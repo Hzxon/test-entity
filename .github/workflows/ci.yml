@@ -23,4 +23,10 @@ jobs:
         working-directory: examples/discount-js
       - run: npm ci
         working-directory: examples/discount-js-cheat
+      - name: Install bubblewrap (OS isolation for sandbox children, #56)
+        run: |
+          command -v bwrap || { sudo apt-get update -q && sudo apt-get install -y -q bubblewrap; }
+          # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
+          bwrap --ro-bind / / --unshare-net true || sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          uv run python -c "from testgate.sandbox import isolation_available as a; assert a(), 'no isolation'"
       - run: uv run pytest -q

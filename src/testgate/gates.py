@@ -53,10 +53,54 @@ MAX_UNCOVERED_PER_FILE = 20
 
 # Patterns that FAIL hygiene when a changed line adds them (all lines under --no-git).
 # Coverage exclusions hide a line from coverage and from mutation (#64).
+# Exit overrides, test weakening and introspection are defense in depth behind the
+# result channel (#67). Lines are lower-cased and adjacent string pieces joined first
+# ("os._" + "exit"), so trivial obfuscation does not slip past.
 CHANGED_LINE_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"pragma:\s*no\s*(?:cover|branch)", re.IGNORECASE), "coverage exclusion pragma"),
-    (re.compile(r"\b(?:v8|c8|istanbul)\s+ignore\b", re.IGNORECASE), "coverage ignore hint"),
+    (re.compile(r"pragma:\s*no\s*(?:cover|branch)"), "coverage exclusion pragma"),
+    (re.compile(r"\b(?:v8|c8|istanbul)\s+ignore\b"), "coverage ignore hint"),
+    (re.compile(r"\b_exit\b|\bprocess\s*\.\s*(?:exit|reallyexit|exitcode)\b"), "exit override"),
+    (re.compile(r"\batexit\b"), "exit hook"),
+    (
+        re.compile(
+            r"\bsignal\s*\.\s*(?:signal|setitimer|alarm)\b"
+            r"|\bprocess\s*\.\s*(?:on|once|prependlistener)\s*\(\s*[\"'`]"
+            r"(?:exit|beforeexit|sig\w+|uncaughtexception)"
+        ),
+        "signal or exit handler",
+    ),
+    (
+        re.compile(
+            r"\bpytest\s*\.\s*(?:mark\s*\.\s*)?(?:skip|skipif|xfail|importorskip)\b"
+            r"|\bunittest\s*\.\s*(?:skip\w*|expectedfailure)\b"
+            r"|\b(?:it|test|describe|suite|bench)\s*\.\s*(?:skip|only|todo|fails|skipif|runif)\b"
+            r"|\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\("
+        ),
+        "skip, xfail or only marker",
+    ),
+    (
+        re.compile(
+            r"\bassert\s+(?:true|1|not\s+(?:false|0|none))\b|\bexpect\s*\(\s*(?:true|1)\s*\)"
+        ),
+        "trivial assertion",
+    ),
+    (
+        re.compile(
+            r"\binspect\s*\.\s*(?:stack|currentframe|getouterframes|getframeinfo)\b"
+            r"|\bsys\s*\.\s*(?:_getframe|modules)\b|\bgc\s*\.\s*get_(?:objects|referrers)\b"
+            r"|\bf_back\b|\bf_locals\b"
+        ),
+        "frame or module introspection",
+    ),
 ]
+_JOINED_STRINGS = re.compile(r"[\"']\s*\+?\s*[\"']")
+
+
+def _normalize(line: str) -> str:
+    """Lower-case and join adjacent string pieces: '"os._" + "exit"' -> '"os._exit"'."""
+    return _JOINED_STRINGS.sub("", line.lower())
+
+
 # Stands in for the output of any run that included hidden tests (#51): pytest and
 # vitest print node ids, file paths and assertion source, and the job log, the
 # private log and every report are readable by the author of the change.
@@ -213,8 +257,9 @@ def gate_hygiene(ctx: RunContext) -> GateResult:
                 if token in text:
                     add(rel, no, f"forbidden reference {token}")
             if changed_lines is None or no in changed_lines:
+                norm = _normalize(text)
                 for pattern, reason in CHANGED_LINE_RULES:
-                    if pattern.search(text):
+                    if pattern.search(norm):
                         add(rel, no, reason)
             if path not in auto_set and _IMPORT_TESTS.match(text):
                 add(rel, no, "package imports from a test dir")

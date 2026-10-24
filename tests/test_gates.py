@@ -438,7 +438,7 @@ def test_hidden_public_is_counts_only(tmp_path: Path, fakes: Fakes) -> None:
     blob = repr(result.public) + result.summary
     assert HIDDEN_NAME not in blob
     assert "AssertionError" not in blob
-    assert HIDDEN_NAME in result.private["output"]
+    assert HIDDEN_NAME not in repr(result.private)  # #51: not even the private log
     assert list(fakes.builds[0].test_dirs) == ["hidden"]
     assert fakes.pytest_calls[0][0] == ["hidden"]
 
@@ -760,7 +760,8 @@ def test_coverage_baseline_excludes_hidden_files_failing_at_base(
     assert "baseline_skipped" not in result.public
     assert fakes.builds[2].test_dirs["hidden"] != ctx.hidden_dir
     assert fakes.builds[2].hidden_files == ["test_old.py"]
-    assert any("test_new.py" in line for line in ctx.private_log)
+    assert not any("test_new.py" in line for line in ctx.private_log)  # #51: count only
+    assert "hidden files excluded at base: 1" in ctx.private_log
 
 
 def test_coverage_baseline_no_hidden_left_at_base_falls_back_to_golden(

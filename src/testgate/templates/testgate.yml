@@ -34,11 +34,3 @@ jobs:
           hidden-dir: ${{ github.workspace }}/.testgate-hidden
         env:
           TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}
-
-      - name: Upload private log
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: testgate-private-log
-          path: testgate-private.log
-          if-no-files-found: ignore

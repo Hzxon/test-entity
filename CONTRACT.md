@@ -296,11 +296,11 @@ testgate mutants [--root DIR] [--base REF] [--no-git] [--max N]
 
 - `testgate.yaml` — the YAML above with comments explaining every key, `package:`/`import_name:` filled by init.
 - `test_example.py` — one golden test plus one Hypothesis property test showing the pattern.
-- `testgate.yml` — GitHub workflow: on pull_request; checkout with fetch-depth 0; optional checkout of the hidden repo into `.testgate-hidden` using `secrets.TESTGATE_HIDDEN_REPO` and a read-only deploy key in `secrets.TESTGATE_HIDDEN_SSH_KEY`; run `uses: <owner>/testgate@v0` (placeholder) with `base: origin/${{ github.base_ref }}`; `TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}`; upload `testgate-private.log` as an artifact.
+- `testgate.yml` — GitHub workflow: on pull_request; checkout with fetch-depth 0; optional checkout of the hidden repo into `.testgate-hidden` using `secrets.TESTGATE_HIDDEN_REPO` and a read-only deploy key in `secrets.TESTGATE_HIDDEN_SSH_KEY`; run `uses: <owner>/testgate@v0` (placeholder) with `base: origin/${{ github.base_ref }}`; `TESTGATE_SEED: ${{ secrets.TESTGATE_SEED }}`; never uploads the private log (#51).
 
 ## action.yml (repo root)
 
-Composite action. Inputs: `base` (default `origin/main`), `hidden-dir` (default `.testgate-hidden`), `python-version` (default `3.12`), `root` (default `.`). Steps: setup-python; `pip install "${{ github.action_path }}"`; run `testgate run --root <root> --base <base> --hidden <hidden-dir> --json testgate.json --private-log testgate-private.log`; always upload the private log as artifact `testgate-private`. Outputs: `verdict` read from testgate.json.
+Composite action. Inputs: `base` (default `origin/main`), `hidden-dir` (default `.testgate-hidden`), `python-version` (default `3.12`), `root` (default `.`). Steps: setup-python; `pip install "${{ github.action_path }}"`; run `testgate run --root <root> --base <base> --hidden <hidden-dir> --json testgate.json --private-log testgate-private.log`; the private log stays on the runner and is never uploaded, because job artifacts are readable by the author of the change (#51). Outputs: `verdict` read from testgate.json.
 
 ## examples/
 

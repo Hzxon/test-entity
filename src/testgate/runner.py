@@ -169,7 +169,10 @@ def _pytest_args(
     files: list[str] | None = None,
 ) -> list[str]:
     paths = files if files else [f"tests/{n}" for n in test_names]
-    args = ["-m", "pytest", "-q", "--tb=short", "-rA", "-p", _CHANNEL_MODULE, *paths]
+    # Hidden runs print no tracebacks and no per-test summary lines (#51); the
+    # channel still names failing tests, in memory only.
+    report = ["--tb=no", "-rN"] if "hidden" in test_names else ["--tb=short", "-rA"]
+    args = ["-m", "pytest", "-q", *report, "-p", _CHANNEL_MODULE, *paths]
     if seed and _has_hypothesis(sb):
         # plugin autoload is off (a PR must not inject plugins), so load hypothesis by name
         args += ["-p", "_hypothesis_pytestplugin", f"--hypothesis-seed={seed}"]

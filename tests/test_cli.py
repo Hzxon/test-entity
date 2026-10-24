@@ -161,8 +161,7 @@ def test_run_no_git_reaches_verdict(
     assert by_name["protected"]["status"] == "skip"
     assert "test_hidden_secret_name" not in json_path.read_text()
     assert "test_hidden_secret_name" not in out
-    if not good:
-        assert "test_hidden_secret_name" in log_path.read_text()
+    assert "test_hidden_secret_name" not in log_path.read_text()  # #51
 
 
 def test_run_quiet_and_step_summary(

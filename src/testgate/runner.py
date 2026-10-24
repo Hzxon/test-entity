@@ -45,17 +45,33 @@ def _emit(record):
         pass
 
 
+# Ids whose item carries a skip or skipif marker. report.keywords is no use here:
+# pytest adds "skip" to it for runtime skips too.
+_marked = set()
+
+
 def pytest_collectreport(report):
     if report.failed:
         _emit({"t": "collect_error", "id": report.nodeid})
+    elif report.skipped:
+        _emit({"t": "collect_skip", "id": report.nodeid})
 
 
 def pytest_collection_finish(session):
+    _marked.update(
+        item.nodeid
+        for item in session.items
+        if any(m.name in ("skip", "skipif") for m in item.iter_markers())
+    )
     _emit({"t": "collected", "n": len(session.items)})
 
 
 def pytest_runtest_logreport(report):
-    _emit({"t": "report", "id": report.nodeid, "when": report.when, "outcome": report.outcome})
+    rec = {"t": "report", "id": report.nodeid, "when": report.when, "outcome": report.outcome}
+    if report.skipped:
+        rec["mark"] = report.nodeid in _marked
+        rec["xfail"] = hasattr(report, "wasxfail")
+    _emit(rec)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -107,7 +123,11 @@ def _run_with_channel(
 
 
 def _parse_channel(text: str) -> dict[str, Any] | None:
-    """Fold channel records into counts and a verdict; None when nothing was collected."""
+    """Fold channel records into counts and a verdict; None when nothing was collected.
+
+    A skip counts only when a skip/skipif marker decided it; any other skip, a
+    collection-time skip, or an xfail is a failure with its id.
+    """
     collected: int | None = None
     ended = False
     collect_errors: list[str] = []
@@ -122,7 +142,7 @@ def _parse_channel(text: str) -> dict[str, Any] | None:
         kind = rec.get("t")
         if kind == "collected":
             collected = int(rec.get("n", 0))
-        elif kind == "collect_error":
+        elif kind in ("collect_error", "collect_skip"):
             collect_errors.append(str(rec.get("id", "")))
         elif kind == "end":
             ended = True
@@ -132,8 +152,9 @@ def _parse_channel(text: str) -> dict[str, Any] | None:
             cur = state.get(nid)
             if outcome == "failed":
                 state[nid] = "failed" if when == "call" else (cur if cur == "failed" else "error")
-            elif outcome == "skipped" and cur is None:
-                state[nid] = "skipped"
+            elif outcome == "skipped":
+                legit = when == "setup" and rec.get("mark") is True and rec.get("xfail") is not True
+                state[nid] = "skipped" if legit and cur is None else "failed"
             elif outcome == "passed" and when == "call" and cur is None:
                 state[nid] = "passed"
             else:

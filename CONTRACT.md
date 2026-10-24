@@ -31,7 +31,8 @@ because:
 5. Every test run happens in a **fresh temp root** containing only the
    package and the chosen test dirs, with `--noconftest -p no:cacheprovider`
    and a scrubbed environment. The verdict comes from a runner-owned result
-   channel, never from the child's exit code.
+   channel, never from the child's exit code. A Python skip counts only when a
+   `skip`/`skipif` marker decided it; any other skip or xfail is a failure.
 6. The public report shows **counts, scores and file:line only**. Runs that
    include hidden tests are redacted everywhere, the private log included, and
    the private log is never uploaded.

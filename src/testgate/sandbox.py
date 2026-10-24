@@ -77,6 +77,7 @@ def run_in_sandbox(
     argv: list[str],
     timeout_s: int,
     extra_env: dict[str, str] | None = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     env = {**sb.env, **(extra_env or {})}
     try:
@@ -88,6 +89,7 @@ def run_in_sandbox(
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            pass_fds=pass_fds,
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(

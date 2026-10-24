@@ -142,10 +142,16 @@ class TestRun:
     duration_s: float
     output: str  # full stdout+stderr; private
     timed_out: bool = False
+    # Verdict of a runner-owned result channel (#53): True only when every collected
+    # test reported a pass and the run reached its end marker. None = the adapter has
+    # no channel (http: the runner itself drives the requests), so the exit code decides.
+    reported_ok: bool | None = None
+    failed_ids: list[str] = field(default_factory=list)  # from the channel; in memory only
 
     @property
     def ok(self) -> bool:
-        return self.exit_code == 0 and not self.timed_out
+        # The exit code can only add failure: code under test can force it to 0.
+        return self.exit_code == 0 and not self.timed_out and self.reported_ok is not False
 
 
 @dataclass

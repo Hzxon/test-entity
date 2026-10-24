@@ -147,8 +147,10 @@ class JsLanguage:
         fail_fast: bool,
         extra: list[str],
     ) -> TestRun:
-        out_file = sb.root / "vitest.json"
-        out_file.unlink(missing_ok=True)
+        # The JSON report is the result channel (#53): written by vitest's main process
+        # to a runner-owned directory outside the sandbox root, then checked for counts.
+        out_dir = Path(tempfile.mkdtemp(prefix="testgate-vitest-"))
+        out_file = out_dir / "vitest.json"
         argv = [
             "node",
             str(sb.root / "node_modules" / "vitest" / "vitest.mjs"),
@@ -166,31 +168,51 @@ class JsLanguage:
         # Positional filters, not --dir: --dir rebases the include globs and finds nothing.
         argv.extend(files or [f"tests/{n}/" for n in names])
         t0 = time.monotonic()
-        proc = run_in_sandbox(sb, argv, timeout_s, {"TESTGATE_FC_SEED": str(_fc_seed(seed))})
-        duration = time.monotonic() - t0
+        try:
+            proc = run_in_sandbox(sb, argv, timeout_s, {"TESTGATE_FC_SEED": str(_fc_seed(seed))})
+            duration = time.monotonic() - t0
+            try:
+                data = json.loads(out_file.read_text())
+            except (OSError, ValueError):
+                data = None
+        finally:
+            shutil.rmtree(out_dir, ignore_errors=True)
         passed = failed = errors = skipped = 0
         details: list[str] = []  # per-test lines for the private log, like pytest -rA
-        try:
-            data = json.loads(out_file.read_text())
+        failed_ids: list[str] = []
+        reported_ok = False
+        if isinstance(data, dict):
             passed = int(data.get("numPassedTests", 0))
             failed = int(data.get("numFailedTests", 0))
             skipped = int(data.get("numPendingTests", 0)) + int(data.get("numTodoTests", 0))
             errors = int(data.get("numFailedTestSuites", 0))
-            for suite in data.get("testResults", []):
+            suites = data.get("testResults", [])
+            cases = 0
+            for suite in suites:
                 rel = _rel_to(sb.root, str(suite.get("name", "")))
                 if suite.get("status") not in (None, "passed") and not suite.get(
                     "assertionResults"
                 ):
                     details.append(f"ERROR {rel}")  # suite failed to load
+                    failed_ids.append(rel)
                 for case in suite.get("assertionResults", []):
-                    details.append(
-                        f"{case.get('status', '?').upper()} {rel}::{case.get('fullName', '')}"
-                    )
+                    cases += 1
+                    status = str(case.get("status", "?"))
+                    nid = f"{rel}::{case.get('fullName', '')}"
+                    details.append(f"{status.upper()} {nid}")
                     details.extend(str(m) for m in case.get("failureMessages", []))
+                    if status == "failed":
+                        failed_ids.append(nid)
                 if suite.get("message"):
                     details.append(str(suite["message"]))
-        except (OSError, ValueError):
-            pass
+            total = int(data.get("numTotalTests", -1))
+            reported_ok = (
+                data.get("success") is True
+                and failed == 0
+                and errors == 0
+                and total == passed + failed + skipped == cases
+                and int(data.get("numTotalTestSuites", -1)) == len(suites)
+            )
         exit_code = proc.returncode
         if exit_code == 0 and (passed + failed == 0 or errors > 0):
             exit_code = 1
@@ -203,6 +225,8 @@ class JsLanguage:
             duration_s=duration,
             output=(proc.stdout or "") + (proc.stderr or "") + "\n".join(details),
             timed_out=proc.returncode == 124,
+            reported_ok=reported_ok,
+            failed_ids=failed_ids,
         )
 
     def run_tests(
@@ -238,6 +262,8 @@ class JsLanguage:
         return run, _parse_coverage(report, sb.root / dest, repo_package)
 
     def failed_files(self, run: TestRun) -> set[str]:
+        if run.failed_ids:  # from the vitest JSON report: "tests/hidden/x.test.js::name"
+            return {nid.split("::", 1)[0] for nid in run.failed_ids}
         return {m.group(1) for m in _FAILED_LINE.finditer(run.output)}
 
     def _dest(self, sb: Sandbox) -> str:

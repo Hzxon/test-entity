@@ -382,3 +382,36 @@ def test_sampling_deterministic_and_capped() -> None:
     assert [m.id for m in a] == [m.id for m in b]
     assert [m.id for m in a] != [m.id for m in c]
     assert [m.line for m in a] == sorted(m.line for m in a)
+
+
+EXIT_IN_TEST = (
+    'import { test, expect } from "vitest";\n\n'
+    'test("bad", () => {\n  expect(1).toBe(2);\n});\n\n'
+    'test("exit", () => {\n  process.exit(0);\n});\n'
+)
+EXIT_AFTER = (
+    'import { test, expect, afterAll } from "vitest";\n\n'
+    "afterAll(() => {\n  process.reallyExit ? process.reallyExit(0) : process.exit(0);\n});\n\n"
+    'test("bad", () => {\n  expect(1).toBe(2);\n});\n'
+)
+
+
+@pytest.mark.parametrize("body", [EXIT_IN_TEST, EXIT_AFTER], ids=["exit-in-test", "exit-after"])
+def test_process_exit_cannot_pass_failing_tests(sb: Sandbox, body: str) -> None:
+    (sb.test_dirs["golden"] / "m.test.js").write_text(body)
+    run = LANG.run_tests(sb, ["golden"], 120, "s")
+    assert run.reported_ok is False
+    assert not run.ok
+
+
+def test_report_lives_outside_the_sandbox(sb: Sandbox) -> None:
+    run = LANG.run_tests(sb, ["golden"], 120, "s")
+    assert run.ok and run.reported_ok is True
+    assert not (sb.root / "vitest.json").exists()
+
+
+def test_failed_ids_name_failing_files(sb: Sandbox) -> None:
+    (sb.test_dirs["golden"] / "bad.test.js").write_text(FAILING)
+    run = LANG.run_tests(sb, ["golden"], 120, "s")
+    assert run.failed_ids == ["tests/golden/bad.test.js::bad"]
+    assert LANG.failed_files(run) == {"tests/golden/bad.test.js"}

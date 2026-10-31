@@ -37,6 +37,7 @@ from testgate.core import (
     GateError,
     GateResult,
     Mutant,
+    OracleMode,
     ProjectConfig,
     RunContext,
     Sandbox,
@@ -578,6 +579,7 @@ def ctx_path(ctx: RunContext, sb: Sandbox) -> str:
 
 class HttpLanguage:
     name = "http"
+    oracle = OracleMode.BLACK_BOX  # testgate replays the fixtures; the service never gets them
     # the service may be written in anything; these are what the hygiene scan reads
     source_suffixes: tuple[str, ...] = (".py", ".js", ".mjs", ".ts", ".go", ".rb", ".rs", ".java")
     test_glob: str = FIXTURE_GLOB
@@ -664,13 +666,28 @@ class HttpLanguage:
         )
         return subprocess.CompletedProcess(argv, 0 if ok else 1, svc.output(), why)
 
-    def _files(self, sb: Sandbox, names: list[str], files: list[str] | None) -> list[Path]:
+    def _cases(
+        self, sb: Sandbox, names: list[str], files: list[str] | None, seed: str
+    ) -> tuple[list[Case], list[str]]:
+        """Cases of each suite, loaded from the root that holds it (sb.suite_root), so a
+        case's file stays "tests/<suite>/<file>" on either root. `files` are such ids."""
+        groups: list[tuple[Path, list[Path]]]
         if files:
-            return [sb.root / f for f in files]
-        out: list[Path] = []
-        for n in names:
-            out.extend(sorted((sb.root / "tests" / n).rglob(FIXTURE_GLOB)))
-        return out
+            roots = [sb.suite_root(PurePosixPath(f).parts[1]) for f in files]
+            groups = [(root, [root / f]) for root, f in zip(roots, files, strict=True)]
+        else:
+            groups = [
+                (sb.suite_root(n), sorted(sb.test_dirs[n].rglob(FIXTURE_GLOB)))
+                for n in names
+                if n in sb.test_dirs
+            ]
+        cases: list[Case] = []
+        errors: list[str] = []
+        for root, paths in groups:
+            more, errs = load_cases(root, paths, seed)
+            cases += more
+            errors += errs
+        return cases, errors
 
     def run_tests(
         self,
@@ -685,7 +702,7 @@ class HttpLanguage:
         if cfg is None:
             raise GateError("http adapter: build must run before tests")
         t0 = time.monotonic()
-        cases, load_errors = load_cases(sb.root, self._files(sb, names, files), seed)
+        cases, load_errors = self._cases(sb, names, files, seed)
         lines = [f"ERROR {e}" for e in load_errors]
         results: list[CaseResult] = []
         service_error = ""
@@ -817,7 +834,9 @@ class HttpLanguage:
             if ctx.hidden_dir is not None:
                 dirs["hidden"] = ctx.hidden_dir
             dirs = {k: v for k, v in dirs.items() if v.is_dir()}
-            head_sb = sandbox.build_sandbox(cfg, ctx.python, dirs, dest=self.package_dest(cfg))
+            head_sb = sandbox.build_sandbox(
+                cfg, ctx.python, dirs, dest=self.package_dest(cfg), oracle=ctx.oracle
+            )
             base_cfg = dataclasses.replace(cfg, root=tmp)
             base_sb = sandbox.build_sandbox(base_cfg, ctx.python, {}, dest=self.package_dest(cfg))
             boxes = [head_sb, base_sb]
@@ -828,7 +847,7 @@ class HttpLanguage:
                 _base_spec(cfg, ctx.base_ref),
                 (head_sb.src_root / cfg.http_openapi).read_text(encoding="utf-8"),
             )
-            cases, _ = load_cases(head_sb.root, self._files(head_sb, list(dirs), None), ctx.seed)
+            cases, _ = self._cases(head_sb, list(dirs), None, ctx.seed)
             pairs = unchanged_cases(cases, routes, changed)
             if not pairs:
                 return GateResult(

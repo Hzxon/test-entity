@@ -126,14 +126,19 @@ def _skip(name: str, summary: str) -> GateResult:
     return _result(name, Status.SKIP, summary)
 
 
-def _test_dirs(ctx: RunContext, names: tuple[str, ...]) -> dict[str, Path]:
-    """Existing test dirs among golden/auto/hidden, in the order given."""
+def _suite_paths(ctx: RunContext) -> dict[str, Path | None]:
+    """Where each suite named in core.SUITE_TRUST comes from in this project."""
     cfg = ctx.config
-    candidates: dict[str, Path | None] = {
+    return {
         "golden": cfg.root / cfg.golden,
         "auto": cfg.root / cfg.auto,
         "hidden": ctx.hidden_dir,
     }
+
+
+def _test_dirs(ctx: RunContext, names: tuple[str, ...]) -> dict[str, Path]:
+    """Existing test dirs among golden/auto/hidden, in the order given."""
+    candidates = _suite_paths(ctx)
     found: dict[str, Path] = {}
     for name in names:
         path = candidates[name]
@@ -184,7 +189,12 @@ def _sandbox(
     """
     cfg = cfg or ctx.config
     sb = sandbox.build_sandbox(
-        cfg, ctx.python, dirs, overrides=overrides, dest=ctx.language.package_dest(cfg)
+        cfg,
+        ctx.python,
+        dirs,
+        overrides=overrides,
+        dest=ctx.language.package_dest(cfg),
+        oracle=ctx.oracle,
     )
     ctx.language.prepare_sandbox(sb, cfg, ctx.config.root)
     return sb

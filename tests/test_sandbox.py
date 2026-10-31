@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
-from testgate.core import ProjectConfig
+from testgate.core import OracleMode, ProjectConfig
 from testgate.languages.python import PythonLanguage
-from testgate.sandbox import Sandbox, build_sandbox, destroy, run_in_sandbox
+from testgate.sandbox import Sandbox, _masked, build_sandbox, destroy, run_in_sandbox
 
 EXPECTED_ENV_KEYS = {
     "PATH",
@@ -58,6 +59,77 @@ def test_layout(sb: Sandbox) -> None:
     assert (sb.root / "tests" / "golden" / "test_calc.py").is_file()
     assert (sb.root / "tests" / "golden" / "data.json").is_file()
     assert (sb.root / "tmp").is_dir()
+    assert sb.oracle is None  # no trusted suite given, so no root apart
+
+
+@pytest.fixture
+def with_hidden(
+    project: tuple[ProjectConfig, dict[str, Path]], tmp_path: Path
+) -> tuple[ProjectConfig, dict[str, Path]]:
+    cfg, tests = project
+    hidden = tmp_path / "hidden"
+    hidden.mkdir()
+    (hidden / "test_h.py").write_text("def test_h():\n    assert True\n")
+    return cfg, {**tests, "hidden": hidden}
+
+
+def test_trusted_suites_live_outside_the_worker_root(
+    with_hidden: tuple[ProjectConfig, dict[str, Path]],
+) -> None:
+    cfg, tests = with_hidden
+    box = build_sandbox(cfg, sys.executable, tests)
+    try:
+        assert box.oracle is not None
+        assert not (box.root / "tests" / "hidden").exists()
+        assert (box.oracle.root / "tests" / "hidden" / "test_h.py").is_file()
+        assert box.test_dirs["hidden"] == box.oracle.root / "tests" / "hidden"
+        assert box.suite_root("hidden") == box.oracle.root
+        assert box.suite_root("golden") == box.root  # golden stays beside in v1
+        assert not box.oracle.root.is_relative_to(box.root)
+        assert not box.root.is_relative_to(box.oracle.root)
+        assert box.oracle.env["HOME"] == str(box.oracle.root)
+        assert str(box.src_root) not in "".join(box.oracle.env.values())
+    finally:
+        destroy(box)
+    assert not box.root.exists() and not box.oracle.root.exists()
+
+
+@pytest.mark.parametrize("mode", [OracleMode.PROCESS, OracleMode.BLACK_BOX])
+def test_separating_modes_place_hidden_apart(
+    with_hidden: tuple[ProjectConfig, dict[str, Path]], mode: OracleMode
+) -> None:
+    cfg, tests = with_hidden
+    box = build_sandbox(cfg, sys.executable, tests, oracle=mode)
+    try:
+        assert box.oracle is not None and not (box.root / "tests" / "hidden").exists()
+    finally:
+        destroy(box)
+
+
+def test_in_process_mode_keeps_todays_layout(
+    with_hidden: tuple[ProjectConfig, dict[str, Path]],
+) -> None:
+    cfg, tests = with_hidden
+    box = build_sandbox(cfg, sys.executable, tests, oracle=OracleMode.IN_PROCESS)
+    try:
+        assert box.oracle is None
+        assert box.test_dirs == {n: box.root / "tests" / n for n in ("golden", "hidden")}
+        assert (box.root / "tests" / "hidden" / "test_h.py").is_file()
+    finally:
+        destroy(box)
+
+
+def test_unknown_suite_name_is_rejected(project: tuple[ProjectConfig, dict[str, Path]]) -> None:
+    cfg, tests = project
+    roots = lambda: set(Path(tempfile.gettempdir()).glob("testgate-*"))
+    before = roots()
+    with pytest.raises(ValueError, match="unknown test suite: secret"):
+        build_sandbox(cfg, sys.executable, {**tests, "secret": tests["golden"]})
+    assert roots() == before  # rejected before any root was made
+
+
+def test_masked_includes_the_temp_dir() -> None:
+    assert tempfile.gettempdir() in _masked()
 
 
 def test_excludes_conftest_cache_and_dot_dirs(sb: Sandbox) -> None:

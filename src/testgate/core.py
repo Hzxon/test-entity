@@ -9,9 +9,32 @@ from __future__ import annotations
 
 import enum
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol
+
+# The only list of suite names. True = trusted: owner-written, and placed apart from the
+# code under test whenever the adapter's oracle mode separates files. False = runs beside
+# the package. v1 trusts hidden only: golden stays beside (its tmp_path tests and the
+# beside seed keep working), and auto is the author's own suite.
+# gates._suite_paths maps the same names to paths; a unit test fails when the two disagree.
+SUITE_TRUST: Mapping[str, bool] = MappingProxyType({"golden": False, "auto": False, "hidden": True})
+TRUSTED_SUITES: frozenset[str] = frozenset(n for n, trusted in SUITE_TRUST.items() if trusted)
+
+
+class OracleMode(str, enum.Enum):
+    """How an adapter keeps trusted suites away from the code under test. Public in the report."""
+
+    PROCESS = "process"  # pytest runs in an oracle process; the package in a worker
+    BLACK_BOX = "black-box"  # http: fixtures are data that testgate itself replays
+    IN_PROCESS = "in-process"  # tests and the code under test share one process and one root
+
+    @property
+    def separates_files(self) -> bool:
+        """True when trusted suite files go to their own root, not the sandbox root."""
+        return self is not OracleMode.IN_PROCESS
 
 
 class Status(str, enum.Enum):
@@ -111,6 +134,12 @@ class RunContext:
     def log(self, line: str) -> None:
         self.private_log.append(line)
 
+    @property
+    def oracle(self) -> OracleMode:
+        """The adapter's mode. An adapter without the attribute (test fakes) is IN_PROCESS."""
+        mode: OracleMode = getattr(self.language, "oracle", OracleMode.IN_PROCESS)
+        return mode
+
 
 @dataclass
 class GateResult:
@@ -198,6 +227,7 @@ class Report:
     seed_is_secret: bool
     version: str = "0.1.0"
     isolation: str = "best-effort"  # "bwrap" when sandbox children ran under bubblewrap
+    oracle: str = OracleMode.IN_PROCESS.value  # set by report.build_report from ctx.oracle
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -208,6 +238,7 @@ class Report:
             "changed_lines": self.changed_lines,
             "seed_is_secret": self.seed_is_secret,
             "isolation": self.isolation,
+            "oracle": self.oracle,
             "gates": [
                 {
                     "name": g.name,
@@ -221,16 +252,40 @@ class Report:
         }
 
 
+@dataclass(frozen=True)
+class OracleRoot:
+    """Trusted suites, copied into their own temp root that no sandbox child mounts.
+
+    Under bubblewrap, sandbox.wrap masks the temp dir and binds only the sandbox root back,
+    so code under test cannot reach this root. Without bubblewrap a same-uid process can
+    still read it by path: integrity is best effort there ("isolation: best-effort").
+    """
+
+    root: Path  # its own temp dir, never nested in Sandbox.root
+    env: Mapping[str, str]  # env for a process run there: no package path, HOME/TMPDIR inside
+
+
 @dataclass
 class Sandbox:
-    """A fresh temp root holding the package copy and the chosen test dirs."""
+    """A fresh temp root holding the package copy and the chosen test dirs.
 
-    root: Path  # temp dir
+    Trusted suites live under ``oracle.root`` instead when the oracle mode separates files.
+    """
+
+    root: Path  # temp dir; the only root a sandbox child may write
     src_root: Path  # <root>/<package_dest>
-    test_dirs: dict[str, Path]  # name -> <root>/tests/<name>
+    # every suite of this sandbox: name -> <its root>/tests/<name>, where its root is
+    # root or oracle.root
+    test_dirs: dict[str, Path]
     python: str
     env: dict[str, str]
     network: bool
+    oracle: OracleRoot | None = None  # None when no trusted suite was placed apart
+
+    def suite_root(self, name: str) -> Path:
+        """The root a suite's files live under. Ids stay "tests/<name>/<file>" relative to
+        it whichever root that is. KeyError for a suite this sandbox does not hold."""
+        return self.test_dirs[name].parents[1]
 
 
 class Language(Protocol):
@@ -240,6 +295,7 @@ class Language(Protocol):
     source_suffixes: tuple[str, ...]
     test_glob: str
     detection_tokens: tuple[str, ...]
+    oracle: OracleMode  # how this adapter keeps trusted suites from the code under test
 
     def package_dest(self, cfg: ProjectConfig) -> str: ...
     def prepare_sandbox(self, sb: Sandbox, cfg: ProjectConfig, project_root: Path) -> None: ...

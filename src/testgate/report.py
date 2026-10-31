@@ -22,6 +22,7 @@ def build_report(ctx: RunContext, results: list[GateResult]) -> Report:
         changed_files=len(ctx.changed),
         changed_lines=sum(len(c.lines) for c in ctx.changed),
         seed_is_secret=ctx.seed_is_secret,
+        oracle=ctx.oracle.value,
     )
 
 
@@ -48,7 +49,7 @@ def to_markdown(report: Report) -> str:
     lines.append(
         f"base: {report.base_ref or 'none'}; changed: {report.changed_files} file(s), "
         f"{report.changed_lines} line(s); seed_is_secret: {str(report.seed_is_secret).lower()}; "
-        f"isolation: {report.isolation}"
+        f"isolation: {report.isolation}; oracle: {report.oracle}"
     )
     for g in report.gates:
         if not g.public:

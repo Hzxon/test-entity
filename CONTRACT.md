@@ -45,7 +45,8 @@ because:
 - **Isolation is best-effort without bubblewrap.** With `bwrap` on Linux
   (`isolation: bwrap` in the report) children get no network namespace, a
   read-only host and no view of the home dir, the checkout or the runner's
-  temp dirs. Without it (`isolation: best-effort`) the env scrub and the
+  temp dirs (`/tmp`, `/var/tmp` and the system temp dir, which holds every
+  sandbox and oracle root; only the sandbox's own root is bound back). Without it (`isolation: best-effort`) the env scrub and the
   Python/Node socket block are all there is: code can bypass the block
   (`_socket`, `python -I`, `subprocess` + `curl`) and read any file the runner
   user can. Set `sandbox.require_isolation: true` to FAIL instead.
@@ -383,6 +384,10 @@ class Language(Protocol):                       # in core.py; no sibling imports
     source_suffixes: tuple[str, ...]            # (".py",) | (".js", ".mjs", ".cjs", ".ts")
     test_glob: str                              # "test_*.py" | "*.test.*"   (auto files + hygiene)
     detection_tokens: tuple[str, ...]           # extra hygiene tokens for this language
+    oracle: OracleMode                          # http: BLACK_BOX; python, js: IN_PROCESS. Public as
+                                                # "oracle" in the report. A mode other than IN_PROCESS
+                                                # puts trusted suites (core.SUITE_TRUST: hidden) in
+                                                # their own temp root, outside sb.root (sb.suite_root)
     def package_dest(self, cfg: ProjectConfig) -> str
         # where cfg.package is copied inside the sandbox, relative to its root:
         # python -> f"src/{cfg.import_name}"; js -> cfg.package (layout preserved so relative imports work)

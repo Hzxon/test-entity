@@ -19,7 +19,15 @@ from pathlib import Path
 from typing import Any
 
 from testgate import gitinfo
-from testgate.core import CoverageData, GateError, Mutant, ProjectConfig, Sandbox, TestRun
+from testgate.core import (
+    CoverageData,
+    GateError,
+    Mutant,
+    OracleMode,
+    ProjectConfig,
+    Sandbox,
+    TestRun,
+)
 from testgate.sandbox import run_in_sandbox
 
 # A node_modules directory the caller already trusts, used instead of installing one
@@ -97,6 +105,7 @@ def _ok(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 class JsLanguage:
     name = "js"
+    oracle = OracleMode.IN_PROCESS
     source_suffixes: tuple[str, ...] = (".js", ".mjs", ".cjs", ".ts")
     test_glob: str = "*.test.*"
     detection_tokens: tuple[str, ...] = (

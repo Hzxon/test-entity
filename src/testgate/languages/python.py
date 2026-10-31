@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from testgate import mutator, runner
-from testgate.core import CoverageData, Mutant, ProjectConfig, Sandbox, TestRun
+from testgate.core import CoverageData, Mutant, OracleMode, ProjectConfig, Sandbox, TestRun
 from testgate.sandbox import run_in_sandbox
 
 _SITECUSTOMIZE = """\
@@ -35,6 +35,7 @@ _PYTEST_INI = "[pytest]\naddopts = -p no:cacheprovider --noconftest\ntestpaths =
 
 class PythonLanguage:
     name = "python"
+    oracle = OracleMode.IN_PROCESS
     source_suffixes: tuple[str, ...] = (".py",)
     test_glob = "test_*.py"
     detection_tokens: tuple[str, ...] = (
